@@ -49,13 +49,13 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Build Floresta
-        run: cargo build --verbose
+        run: cargo build --verbose --release
 
       - name: Run tests
-        run: cargo test --verbose
+        run: cargo test --verbose --release
         env:
           PWD: ${{ github.workspace }} # without it ci can't see env!("PWD")
 

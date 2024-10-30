@@ -76,7 +76,7 @@ mod tests {
         fs::write(format!("{dirname}/regtest/ssl/cert.pem"), cert_pem).unwrap();
         fs::write(format!("{dirname}/regtest/ssl/key.pem"), key_pem).unwrap();
 
-        let fld = Command::new(format!("{here}/target/debug/florestad"))
+        let fld = Command::new(format!("{here}/target/release/florestad"))
             .args(["-n", "regtest"])
             .args(["--data-dir", &dirname])
             .args(["--rpc-address", &format!("127.0.0.1:{}", port)])
