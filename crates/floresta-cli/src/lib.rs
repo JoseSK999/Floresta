@@ -108,7 +108,7 @@ mod tests {
 
     #[test]
     fn test_stop() {
-        let (mut _proc, client) = start_florestad();
+        let (_proc, client) = start_florestad();
 
         let stop = client.stop().expect("rpc not working");
         assert!(stop);
