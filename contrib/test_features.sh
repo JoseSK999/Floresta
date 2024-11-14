@@ -6,6 +6,9 @@ set -e
 # Install or update cargo-hack (will skip if up-to-date)
 cargo install cargo-hack --locked
 
+# Pass the first argument to the script as a cargo argument, defaults to empty string
+cargo_arg="${1:-}"
+
 crates="\
     floresta-chain \
     floresta-cli \
@@ -36,11 +39,10 @@ for crate in $crates; do
 
     # Navigate to the crate's directory
     cd "$path" || exit 1
-    echo "Testing all feature combinations for $crate..."
-    export RUSTFLAGS="-Awarnings"
+    printf "\033[1;35mTesting all feature combinations for %s...\033[0m\n" "$crate"
 
-    # Test all feature combinations
+    # Test all feature combinations (to run with verbose output the `cargo_arg` must also be -v/--verbose)
     # shellcheck disable=SC2086
-    cargo hack test --release --feature-powerset $skip_default --quiet
+    cargo hack test --release --feature-powerset $skip_default -v $cargo_arg
     cd - > /dev/null || exit 1
 done

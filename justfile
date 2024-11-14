@@ -57,6 +57,6 @@ fmt:
 format:
     cargo +nightly fmt --all --check
 
-# Test all feature combinations for each crate using cargo hack
-test-features:
-    ./contrib/test_features.sh
+# Test all feature combinations for each crate using cargo hack (arg: optional, e.g., --quiet or --verbose)
+test-features arg="":
+    ./contrib/test_features.sh {{arg}}
