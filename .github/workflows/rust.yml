@@ -29,7 +29,7 @@ jobs:
       - name: Run cargo clippy
         run: cargo +nightly clippy --all-targets
         env:
-          PWD: ${{ github.workspace }} # without it ci can't see env!("PWD")
+          PWD: ${{ github.workspace }} # without it ci can't see env!("PWD") 
 
   cross-testing:
     strategy:
