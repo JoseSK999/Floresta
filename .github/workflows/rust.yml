@@ -40,24 +40,31 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Cache Rust
+      # Capture the Rust compiler version to include in the cache key
+      - name: Get rustc version
+        id: rustc-version
+        run: echo "rustc_version=$(rustc --version)" >> $GITHUB_OUTPUT
+
+      # Restore cached dependencies and build artifacts
+      - name: Cache Rust artifacts
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/bin/
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+            target/       # Cache both debug and release build artifacts
+          # Unique cache key based on OS, Rust compiler version, and important files
+          key: ${{ runner.os }}-rustc-${{ steps.rustc-version.outputs.rustc_version }}-cargo-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml', '**/*.rs', 'contrib/test_features.sh') }}
 
-      - name: Build Floresta
-        run: cargo build --verbose
+      # Build the project binaries
+      - name: Build Project Binaries
+        run: cargo build --bins --verbose
 
-      - name: Run tests
-        run: cargo test --verbose
-        env:
-          PWD: ${{ github.workspace }} # without it ci can't see env!("PWD")
+      # Run the feature testing script
+      - name: Run feature tests
+        run: ./contrib/test_features.sh
+        shell: bash
 
   build-docker:
     runs-on: ubuntu-latest
