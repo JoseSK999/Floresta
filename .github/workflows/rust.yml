@@ -34,13 +34,17 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.74.1 # The version in our `rust-toolchain.toml`
+        with:
+          components: rustfmt, clippy
+      - uses: taiki-e/install-action@cargo-hack
 
       # Bi-weekly numbers to invalidate caches periodically, in order to cache recent project changes
-      - name: Set Bi-Weekly Cache Key
+      - name: Set bi-weekly cache key
         run: |
           YEAR=$(date +%Y)
           BIWEEK=$(( ($(date +%U) + 1) / 2 ))
-          echo "CACHE_VERSION=${YEAR}-B${BIWEEK}" >> $GITHUB_ENV
+          echo "CACHE_VERSION=${YEAR}(${BIWEEK})" >> $GITHUB_ENV
         shell: bash
 
       # Restore cached dependencies and build artifacts
@@ -60,7 +64,7 @@ jobs:
             ${{ runner.os }}-cargo-
 
       # Build only the binaries
-      - name: Build Binaries
+      - name: Build binaries
         run: cargo build --release --bins --verbose
 
       # Run the feature testing script

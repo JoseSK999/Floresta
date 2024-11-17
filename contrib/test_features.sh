@@ -3,9 +3,6 @@
 # Exit immediately if any command fails
 set -e
 
-# Install or update cargo-hack (will skip if up-to-date)
-cargo install cargo-hack --locked
-
 # Pass the first argument to the script as a cargo argument, defaults to empty string
 cargo_arg="${1:-}"
 

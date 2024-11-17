@@ -16,7 +16,6 @@ jobs:
       - name: Prepare environment
         run: sudo apt-get install -y python3-pip && pip3 install -r tests/requirements.txt
 
-      # We could re-use ubuntu rust.yml cache here
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
 
