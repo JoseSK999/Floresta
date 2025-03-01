@@ -46,6 +46,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-bench-${{ env.CACHE_VERSION }}-
             ${{ runner.os }}-cargo-bench-
+
       # Run benchmarks
       - name: Run cargo bench
         run: cargo bench
