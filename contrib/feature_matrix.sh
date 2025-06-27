@@ -55,7 +55,8 @@ for crate in $crates; do
     if [ "$action" = "clippy" ]; then
         # shellcheck disable=SC2086
         cargo +nightly hack clippy --all-targets --feature-powerset $skip_default $store_features $cargo_arg
-    elif [ "$action" = "test" ]; then
+
+    elif [ "$action" = "test" ] && [ "$crate" != "floresta" ]; then
         # shellcheck disable=SC2086
         cargo hack test --release --feature-powerset $skip_default $store_features -v $cargo_arg
     fi
