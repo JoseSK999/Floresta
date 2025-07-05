@@ -367,14 +367,6 @@ impl Florestad {
             .expect("Failure to setup logger");
         }
 
-        // The config file inside our datadir directory. Any datadir
-        // passed as argument will be used instead
-        let system_config_file = format!("{data_dir}/config.toml");
-        let config_file = match &self.config.config_file {
-            Some(path) => Self::get_config_file(path),
-            None => Self::get_config_file(&system_config_file),
-        };
-
         // Load the watch-only wallet
         debug!("Loading wallet");
         let mut wallet = Self::load_wallet(&data_dir);
@@ -382,18 +374,7 @@ impl Florestad {
         debug!("Done loading wallet");
 
         // Try to add more wallets to watch if needed
-        let result = Self::setup_wallet(
-            Self::get_both_vec(self.config.wallet_xpub.clone(), config_file.wallet.xpubs),
-            Self::get_both_vec(
-                self.config.wallet_descriptor.clone(),
-                config_file.wallet.descriptors,
-            ),
-            Self::get_both_vec(config_file.wallet.addresses.clone(), None),
-            &mut wallet,
-            self.config.network,
-        );
-
-        if let Err(e) = result {
+        if let Err(e) = self.setup_wallet(&data_dir, &mut wallet) {
             log::error!("Something went wrong while setting wallet up: {e}");
             return;
         }
@@ -883,16 +864,23 @@ impl Florestad {
     }
 
     fn setup_wallet<D: AddressCacheDatabase>(
-        mut xpubs: Vec<String>,
-        descriptors: Vec<String>,
-        addresses: Vec<String>,
+        &self,
+        data_dir: &str,
         wallet: &mut AddressCache<D>,
-        network: Network,
     ) -> anyhow::Result<()> {
-        if let Some(key) = Self::get_key_from_env() {
-            xpubs.push(key);
-        }
+        // The config file inside our data directory or inside the CLI-specified directory
+        let config_file = match &self.config.config_file {
+            Some(path) => Self::get_config_file(path),
+            None => {
+                let system_config_file = format!("{data_dir}/config.toml");
+                Self::get_config_file(&system_config_file)
+            }
+        };
+        let (xpubs, descriptors, addresses) = self.get_setup_wallet_data(config_file);
+        let network = self.config.network;
+
         let setup = InitialWalletSetup::build(&xpubs, &descriptors, &addresses, network, 100)?;
+
         for descriptor in setup.descriptors {
             let descriptor = descriptor.to_string();
             if !wallet.is_cached(&descriptor)? {
@@ -902,19 +890,27 @@ impl Florestad {
         for addresses in setup.addresses {
             wallet.cache_address(addresses.script_pubkey());
         }
+
         info!("Wallet setup completed!");
         anyhow::Ok(())
     }
 
-    fn get_both_vec<T>(a: Option<Vec<T>>, b: Option<Vec<T>>) -> Vec<T> {
-        let mut result: Vec<T> = Vec::new();
-        if let Some(a) = a {
-            result.extend(a);
+    fn get_setup_wallet_data(
+        &self,
+        config_file: ConfigFile,
+    ) -> (Vec<String>, Vec<String>, Vec<String>) {
+        fn merge_vecs(a: &Option<Vec<String>>, b: Option<Vec<String>>) -> Vec<String> {
+            a.clone().into_iter().chain(b).flatten().collect()
         }
-        if let Some(b) = b {
-            result.extend(b);
-        }
-        result
+        let config = &self.config;
+
+        let mut xpubs = merge_vecs(&config.wallet_xpub, config_file.wallet.xpubs);
+        let descriptors = merge_vecs(&config.wallet_descriptor, config_file.wallet.descriptors);
+        let addresses = config_file.wallet.addresses.unwrap_or_default();
+
+        xpubs.extend(Self::get_key_from_env());
+
+        (xpubs, descriptors, addresses)
     }
 
     /// Get the default Electrum port for the Network and TLS combination.
