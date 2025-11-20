@@ -21,6 +21,11 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      - name: Install Boost
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libboost-all-dev
+
       - name: Spell check
         uses: crate-ci/typos@v1
 
@@ -49,6 +54,27 @@ jobs:
           components: rustfmt, clippy
       - uses: taiki-e/install-action@cargo-hack
 
+      - name: Install Boost (Ubuntu)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libboost-all-dev
+
+      - name: Install Boost (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew update
+          brew install boost
+
+      - name: Install Boost (Windows)
+        if: runner.os == 'Windows'
+        id: boost
+        uses: MarkusJx/install-boost@v2
+        with:
+          boost_version: 1.89.0
+          platform_version: 2022
+          toolset: msvc
+
       # Bi-weekly numbers to refresh caches every two weeks, ensuring recent project changes are cached
       - name: Set bi-weekly cache key
         # Use '10#' to always treat week number as base-10 (avoids octal when number has a leading zero)
@@ -75,14 +101,45 @@ jobs:
             ${{ runner.os }}-cargo-${{ env.CACHE_VERSION }}-
             ${{ runner.os }}-cargo-
 
+      - name: Create stub fuzz/test_runner.py for libbitcoinkernel-sys
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          # Ensure the crate is downloaded
+          cargo fetch --locked
+
+          REGISTRY_SRC="$HOME/.cargo/registry/src"
+
+          # Find any libbitcoinkernel-sys-* crate
+          CRATE_ROOT="$(find "$REGISTRY_SRC" -maxdepth 5 -type d -name 'libbitcoinkernel-sys-*' -print -quit)"
+
+          if [ -z "$CRATE_ROOT" ]; then
+            echo "libbitcoinkernel-sys crate not found; skipping stub."
+            exit 0
+          fi
+
+          mkdir -p "$CRATE_ROOT/bitcoin/test/fuzz"
+
+          cat > "$CRATE_ROOT/bitcoin/test/fuzz/test_runner.py" << 'EOF'
+          #!/usr/bin/env python3
+          # CI stub to satisfy CMake CREATE_LINK on Windows; not executed by lib build.
+          if __name__ == "__main__":
+              raise SystemExit(0)
+          EOF
+
       # Build only the binaries
       - name: Build binaries
         run: cargo build --release --bins --verbose
+        # Only Windows needs explicit BOOST_ROOT
+        env:
+          BOOST_ROOT: ${{ runner.os == 'Windows' && steps.boost.outputs.BOOST_ROOT || '' }}
 
       # Run the feature testing script
       - name: Run feature tests
         run: ./contrib/feature_matrix.sh test --verbose
         shell: bash   # Ensure the script runs using bash on all platforms
+        env:
+          BOOST_ROOT: ${{ runner.os == 'Windows' && steps.boost.outputs.BOOST_ROOT || '' }}
 
       # Save cache only if the previous steps succeeded and there was not an exact cache key match
       # This happens everytime we modify any `cargo.lock` or `cargo.toml`, or each two weeks (caching recent changes)

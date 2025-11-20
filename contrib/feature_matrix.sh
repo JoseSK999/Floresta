@@ -53,9 +53,9 @@ for crate in $crates; do
 
     # For floresta-chain, floresta-node and florestad, require exactly one of 'flat-chainstore' or 'kv-chainstore'
     if [ "$crate" = "floresta-chain" ] || [ "$crate" = "florestad" ] || [ "$crate" = "floresta-node" ]; then
-        store_feature="--mutually-exclusive-features $chainstore_feats --at-least-one-of $chainstore_feats"
+        store_feature="--mutually-exclusive-features bitcoinconsensus,kernel --mutually-exclusive-features $chainstore_feats --at-least-one-of $chainstore_feats"
     else
-        store_feature=""
+        store_feature="--mutually-exclusive-features bitcoinconsensus,kernel"
     fi
 
     # Navigate to the crate's directory
