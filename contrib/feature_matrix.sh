@@ -13,8 +13,8 @@ fi
 cargo_arg="${2:-}"
 
 crates="\
-    floresta \
     floresta-chain \
+    floresta \
     floresta-common \
     floresta-compact-filters \
     floresta-electrum \

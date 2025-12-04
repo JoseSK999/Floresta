@@ -67,12 +67,22 @@ jobs:
 
       - name: Install Boost (Windows)
         if: runner.os == 'Windows'
-        id: boost
-        uses: MarkusJx/install-boost@v2
-        with:
-          boost_version: 1.89.0
-          platform_version: 2022
-          toolset: msvc
+        shell: bash
+        run: |
+          triplet=x64-windows
+          vcpkgRoot="${VCPKG_INSTALLATION_ROOT:-C:/vcpkg}"
+
+          "$vcpkgRoot/vcpkg.exe" install \
+            boost-system \
+            boost-filesystem \
+            boost-thread \
+            boost-multi-index \
+            --triplet "$triplet" \
+            --clean-after-build \
+            --disable-metrics
+
+          boostRoot="$vcpkgRoot/installed/$triplet"
+          echo "BOOST_ROOT=$boostRoot" >> "$GITHUB_ENV"
 
       # Bi-weekly numbers to refresh caches every two weeks, ensuring recent project changes are cached
       - name: Set bi-weekly cache key
@@ -103,16 +113,11 @@ jobs:
       # Build only the binaries
       - name: Build binaries
         run: cargo build --release --bins --verbose
-        # Only Windows needs explicit BOOST_ROOT
-        env:
-          BOOST_ROOT: ${{ runner.os == 'Windows' && steps.boost.outputs.BOOST_ROOT || '' }}
 
       # Run the feature testing script
       - name: Run feature tests
         run: ./contrib/feature_matrix.sh test --verbose
         shell: bash # Ensure the script runs using bash on all platforms
-        env:
-          BOOST_ROOT: ${{ runner.os == 'Windows' && steps.boost.outputs.BOOST_ROOT || '' }}
 
       # Save cache only if the previous steps succeeded and there was not an exact cache key match
       # This happens everytime we modify any `cargo.lock` or `cargo.toml`, or each two weeks (caching recent changes)
