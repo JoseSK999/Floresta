@@ -726,11 +726,11 @@ impl Florestad {
     }
 
     #[cfg(all(feature = "kv-chainstore", not(doc)))]
-    fn load_chain_state<'a>(
+    fn load_chain_state(
         data_dir: String,
         network: Network,
         assume_valid: Option<bitcoin::BlockHash>,
-    ) -> Result<ChainState<ChainStore<'a>>, FlorestadError> {
+    ) -> Result<ChainState<ChainStore>, FlorestadError> {
         let assume_valid = assume_valid
             .map(AssumeValidArg::UserInput)
             .unwrap_or(AssumeValidArg::Hardcoded);

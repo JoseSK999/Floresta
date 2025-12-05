@@ -23,6 +23,7 @@ bitcoinconsensus = { version = "0.106", optional = true, default-features = fals
 kv = { workspace = true, optional = true }
 lru = { version = "0.16", optional = true }
 memmap2 = { version = "0.9", optional = true }
+redb = { version = "=2.1.4", optional = true }
 rustreexo = { workspace = true }
 serde = { workspace = true, optional = true }
 sha2 = { workspace = true, features = ["std"] }
@@ -49,7 +50,7 @@ bitcoinconsensus = ["bitcoin/bitcoinconsensus", "dep:bitcoinconsensus"]
 metrics = ["dep:metrics"]
 test-utils = ["dep:serde"]
 flat-chainstore = ["dep:memmap2", "dep:lru"]
-kv-chainstore = ["dep:kv"]
+kv-chainstore = ["dep:kv", "dep:redb", "dep:lru"]
 
 [[bench]]
 name = "chain_state_bench"

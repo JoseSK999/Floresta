@@ -18,7 +18,7 @@ pub enum FlorestadError {
     Encode(encode::Error),
 
     /// Key-value database error
-    Db(kv::Error),
+    Db(redb::Error),
 
     /// Integer parsing error.
     ParseNum(std::num::ParseIntError),
@@ -268,7 +268,7 @@ macro_rules! impl_from_error {
 }
 
 impl_from_error!(Encode, encode::Error);
-impl_from_error!(Db, kv::Error);
+impl_from_error!(Db, redb::Error);
 impl_from_error!(ParseNum, std::num::ParseIntError);
 impl_from_error!(Rustreexo, String);
 impl_from_error!(Io, std::io::Error);

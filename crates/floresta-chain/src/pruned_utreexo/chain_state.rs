@@ -1531,10 +1531,10 @@ mod test {
     use crate::KvChainStore;
 
     #[cfg(feature = "kv-chainstore")]
-    fn setup_test_chain<'a>(
+    fn setup_test_chain(
         network: Network,
         assume_valid_arg: AssumeValidArg,
-    ) -> ChainState<KvChainStore<'a>> {
+    ) -> ChainState<KvChainStore> {
         let test_id = rand::random::<u64>();
         let chainstore = KvChainStore::new(format!("./tmp-db/{test_id}/")).unwrap();
         ChainState::new(chainstore, network, assume_valid_arg)
