@@ -367,7 +367,7 @@ impl AddressMan {
             let id = address.id;
             // don't add addresses that don't have the minimum required services
             if !address.services.has(ServiceFlags::WITNESS)
-                | !address.services.has(ServiceFlags::NETWORK_LIMITED)
+                || !address.services.has(ServiceFlags::NETWORK_LIMITED)
             {
                 continue;
             }
@@ -462,7 +462,7 @@ impl AddressMan {
     /// Check if we have enough addresses on the address manager.
     #[rustfmt::skip]
     pub fn enough_addresses(&self) -> bool {
-        if self.good_addresses.len() < MIN_ADDRESSES{
+        if self.good_addresses.len() < MIN_ADDRESSES {
             return false;
         }
 
@@ -483,6 +483,13 @@ impl AddressMan {
                 .entry(service)
                 .or_default()
                 .push(address.id);
+
+            if address.is_good_address() {
+                self.good_peers_by_service
+                    .entry(service)
+                    .or_default()
+                    .push(address.id);
+            }
         }
     }
 
@@ -546,14 +553,20 @@ impl AddressMan {
         socks5: Option<SocketAddr>,
     ) -> Result<Vec<LocalAddress>, std::io::Error> {
         let mut addresses = Vec::new();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
 
         // ask for utreexo peers (if filtering is available)
         if seed.filters.has(service_flags::UTREEXO.into()) {
             let host = format!("x1000000.{}", seed.seed);
             let _addresses = Self::do_lookup(&host, default_port, socks5);
             let _addresses = _addresses.into_iter().map(|mut x| {
-                x.services =
-                    ServiceFlags::NETWORK | service_flags::UTREEXO.into() | ServiceFlags::WITNESS;
+                x.services = ServiceFlags::NETWORK_LIMITED
+                    | service_flags::UTREEXO.into()
+                    | ServiceFlags::WITNESS;
+                x.state = AddressState::Tried(now);
                 x
             });
 
@@ -565,8 +578,10 @@ impl AddressMan {
             let host = format!("x49.{}", seed.seed);
             let _addresses = Self::do_lookup(&host, default_port, socks5);
             let _addresses = _addresses.into_iter().map(|mut x| {
-                x.services =
-                    ServiceFlags::COMPACT_FILTERS | ServiceFlags::NETWORK | ServiceFlags::WITNESS;
+                x.services = ServiceFlags::COMPACT_FILTERS
+                    | ServiceFlags::NETWORK_LIMITED
+                    | ServiceFlags::WITNESS;
+                x.state = AddressState::Tried(now);
                 x
             });
 
@@ -578,7 +593,8 @@ impl AddressMan {
             let host = format!("x9.{}", seed.seed);
             let _addresses = Self::do_lookup(&host, default_port, socks5);
             let _addresses = _addresses.into_iter().map(|mut x| {
-                x.services = ServiceFlags::NETWORK | ServiceFlags::WITNESS;
+                x.services = ServiceFlags::NETWORK_LIMITED | ServiceFlags::WITNESS;
+                x.state = AddressState::Tried(now);
                 x
             });
 
@@ -589,7 +605,8 @@ impl AddressMan {
         if seed.filters == ServiceFlags::NONE {
             let _addresses = Self::do_lookup(seed.seed, default_port, socks5);
             let _addresses = _addresses.into_iter().map(|mut x| {
-                x.services = ServiceFlags::NETWORK | ServiceFlags::WITNESS;
+                x.services = ServiceFlags::NETWORK_LIMITED | ServiceFlags::WITNESS;
+                x.state = AddressState::Tried(now);
                 x
             });
 
@@ -647,7 +664,7 @@ impl AddressMan {
                     continue;
                 }
 
-                AddressState::Banned(when) | AddressState::Failed(when) => {
+                AddressState::Failed(when) => {
                     let now = SystemTime::now()
                         .duration_since(UNIX_EPOCH)
                         .unwrap()
@@ -663,6 +680,8 @@ impl AddressMan {
 
                     self.good_addresses.retain(|&x| x != id);
                 }
+
+                AddressState::Banned(_) => {}
             }
         }
 
@@ -759,7 +778,7 @@ impl AddressMan {
                     }
                 }
                 AddressState::Failed(failed_time) => {
-                    if failed_time + RETRY_TIME < now {
+                    if failed_time + ASSUME_STALE < now {
                         address.state = AddressState::NeverTried;
                     }
                 }
