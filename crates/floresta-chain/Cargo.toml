@@ -24,13 +24,13 @@ lru = { version = "0.16", optional = true }
 memmap2 = { version = "0.9", optional = true }
 rustreexo = { workspace = true }
 serde = { workspace = true, optional = true }
-sha2 = { workspace = true, features = ["std"] }
+sha2 = { workspace = true }
 spin = { workspace = true }
 tracing = { workspace = true }
 twox-hash = { version = "2.1", default-features = false, features = ["xxhash3_64", "std"], optional = true }
 
 # Local dependencies
-floresta-common = { workspace = true, features = ["std"] }
+floresta-common = { workspace = true, default-features = false }
 metrics = { workspace = true,  optional = true }
 
 [dev-dependencies]
@@ -44,7 +44,8 @@ tempfile = { workspace = true }
 zstd = { workspace = true }
 
 [features]
-default = []
+default = ["std"]
+std = ["floresta-common/std", "sha2/std"]
 bitcoinkernel = ["dep:bitcoinkernel"]
 metrics = ["dep:metrics"]
 test-utils = ["dep:serde"]
