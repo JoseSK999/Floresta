@@ -132,6 +132,38 @@ jobs:
             target/release/
           key: ${{ steps.cache.outputs.cache-primary-key }}
 
+  no-std:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - crate: floresta-common
+            feature_args: ""
+          - crate: floresta-common
+            feature_args: "--features descriptors-no-std"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@1.81.0
+        with:
+          targets: thumbv7em-none-eabihf
+
+      - name: Install ARM GCC (for secp256k1-sys)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-arm-none-eabi
+
+      - name: Build ${{ matrix.crate }} for no_std target
+        shell: bash
+        run: |
+          cargo build -p "${{ matrix.crate }}" \
+            --target thumbv7em-none-eabihf \
+            --no-default-features \
+            ${{ matrix.feature_args }} \
+            --locked
+
   build-docker:
     runs-on: ubuntu-latest
     steps:
