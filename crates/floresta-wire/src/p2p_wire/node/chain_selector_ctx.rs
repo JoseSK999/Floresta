@@ -46,6 +46,7 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -497,10 +498,11 @@ where
                     };
 
                     return Ok(InflightBlock {
-                        block,
+                        block: Arc::new(block),
                         proof: Some(proof),
                         leaf_data: Some(uproof.leaf_data),
                         peer,
+                        processing_since: None,
                     });
                 }
                 _ => {}
@@ -927,6 +929,10 @@ where
                     NodeNotification::FromUser(request, responder) => {
                         self.perform_user_request(request, responder).await;
                     }
+
+                    NodeNotification::FromWorker(msg) => {
+                        error!("Received a notification from the worker thread {msg:?}");
+                    }
                 }
             }
 
@@ -974,6 +980,10 @@ where
             NodeNotification::DnsSeedAddresses(addresses) => {
                 self.address_man.push_addresses(&addresses);
             }
+
+            NodeNotification::FromWorker(msg) => {
+                error!("Received a notification from the worker thread {msg:?}");
+            }
         }
         Ok(())
     }
@@ -1011,11 +1021,13 @@ where
                 self.handle_disconnection(peer, idx)?;
             }
 
+            // During chain selection we don't ask for blocks, unless it's an explicit
+            // user request made through the node handle. If it isn't, we punish this
+            // peer for sending an unrequested block.
             PeerMessages::Block(block) => {
-                // During chain selection we don't ask for blocks, unless it's an explicit
-                // user request made through the node handle. If it isn't, we punish this
-                // peer for sending an unrequested block.
-                if self.check_is_user_block_and_reply(block)?.is_some() {
+                let block = self.check_is_user_block_and_reply(block)?;
+
+                if block.is_some() {
                     error!("peer {peer} sent us a block we didn't request");
                     self.increase_banscore(peer, 5)?;
                 }
