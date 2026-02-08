@@ -1298,18 +1298,27 @@ impl<PersistedState: ChainStore> UpdatableChainstate for ChainState<PersistedSta
         assumed_hash: BlockHash,
     ) -> Result<bool, BlockchainError> {
         let assumed_header = self.get_disk_block_header(&assumed_hash)?;
-        let mut curr_header = assumed_header;
 
-        while let Ok(header) = self.get_disk_block_header(&curr_header.block_hash()) {
+        let mut header = assumed_header;
+        let mut hash = assumed_hash;
+        loop {
             if self.is_genesis(&header) {
                 break;
             }
 
             let height = header.try_height()?;
-            self.update_header(&DiskBlockHeader::FullyValid(*header, height))?;
-            curr_header = self.get_ancestor(&header)?;
+            self.update_header_and_index(
+                &DiskBlockHeader::FullyValid(*header, height),
+                hash,
+                height,
+            )?;
+
+            // Move to the previous block
+            header = self.get_ancestor(&header)?;
+            hash = header.block_hash();
         }
 
+        // Update the tip and accumulator data with our assumed tip
         self.update_view(assumed_header.try_height()?, &assumed_header, acc)?;
         self.flush()?;
 
@@ -2613,7 +2622,7 @@ mod test {
 
         let acc = Stump {
             leaves: 42,
-            roots: vec![BitcoinNodeHash::Some([1; 32])],
+            roots: vec![BitcoinNodeHash::Some([1; 32]); 3],
         };
 
         let chain = ChainState::open(

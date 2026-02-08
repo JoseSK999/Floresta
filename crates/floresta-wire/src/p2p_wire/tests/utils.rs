@@ -47,6 +47,7 @@ use crate::node::NodeNotification;
 use crate::node::NodeRequest;
 use crate::node::PeerStatus;
 use crate::node::UtreexoNode;
+use crate::node::swift_sync_ctx::SwiftSync;
 use crate::node::sync_ctx::SyncNode;
 use crate::node_context::NodeContext;
 use crate::p2p_wire::block_proof::UtreexoProof;
@@ -344,13 +345,20 @@ where
     let net = args.network;
     let datadir = args.datadir;
 
+    // Small test databases avoid exhausting disk space on Windows
+    let config = FlatChainStoreConfig {
+        block_index_size: Some(32_768),
+        headers_file_size: Some(32_768),
+        ..FlatChainStoreConfig::new(&datadir)
+    };
     // Create `ChainState` and add headers to it
-    let chainstore = FlatChainStore::new(FlatChainStoreConfig::new(datadir.clone())).unwrap();
+    let chainstore = FlatChainStore::new(config).unwrap();
     let chain = Arc::new(ChainState::open(chainstore, net, AssumeValidArg::Disabled).unwrap());
 
     let headers = match net {
         Network::Signet => signet_headers(),
         Network::Bitcoin => mainnet_headers(),
+        Network::Regtest => Vec::new(),
         _ => panic!("unavailable headers for net: {net}"),
     };
     for header in headers.into_iter().skip(1).take(args.num_blocks) {
@@ -407,17 +415,64 @@ pub async fn setup_sync_node(args: SetupNodeArgs) -> Arc<ChainState<FlatChainSto
     chain
 }
 
+pub async fn setup_swiftsync(args: SetupNodeArgs) -> Arc<ChainState<FlatChainStore>> {
+    let node = setup_node::<SwiftSync>(args);
+    let chain = node.chain.clone();
+
+    timeout(NODE_TIMEOUT, node.run(|_| {})).await.unwrap();
+
+    chain
+}
+
 #[cfg(test)]
 mod tests {
+    use std::fs::File;
+
     use bitcoin::BlockHash;
     use bitcoin::consensus::deserialize;
     use bitcoin::hashes::Hash;
     use floresta_common::bhash;
+    use hintsfile::Hintsfile;
 
     use super::mutate_block;
     use super::signet_blocks;
     use super::signet_headers;
     use super::signet_roots;
+
+    fn load_test_hints() -> Hintsfile {
+        let mut file = File::open("./src/p2p_wire/tests/test_data/bitcoin.hints").unwrap();
+        Hintsfile::from_reader(&mut file).unwrap()
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_hints_file_genesis() {
+        let hints = load_test_hints();
+        hints.indices_at_height(0).unwrap();
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_hints_file_after_stop_height() {
+        let hints = load_test_hints();
+        hints.indices_at_height(176).unwrap();
+    }
+
+    #[test]
+    fn test_hints_file_shape() {
+        let hints = load_test_hints();
+        assert_eq!(hints.stop_height(), 175);
+
+        for height in 1..=175 {
+            let unspent_indices = match height {
+                9 => Vec::new(),      // The single UTXO in this block is spent later
+                170 => vec![0, 1, 2], // Contains the transaction spending the height-9 UTXO
+                _ => vec![0],         // Other blocks have just a coinbase output (here unspent)
+            };
+
+            assert_eq!(hints.indices_at_height(height).unwrap(), unspent_indices);
+        }
+    }
 
     #[test]
     fn test_get_headers_and_blocks() {

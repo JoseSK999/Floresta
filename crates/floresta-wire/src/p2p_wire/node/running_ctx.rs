@@ -39,6 +39,7 @@ use crate::node::NodeRequest;
 use crate::node::UtreexoNode;
 use crate::node::chain_selector_ctx::ChainSelector;
 use crate::node::periodic_job;
+use crate::node::swift_sync_ctx::SwiftSync;
 use crate::node::sync_ctx::SyncNode;
 use crate::node_context::LoopControl;
 use crate::node_context::NodeContext;
@@ -122,19 +123,37 @@ where
     /// proofs, this means the last 100 blocks, and for assumeutreexo, this means however many
     /// blocks from the hard-coded value in the config file.
     pub async fn catch_up(self) -> Result<Self, WireError> {
-        let sync = UtreexoNode {
+        let swift_sync = UtreexoNode {
             common: self.common,
+            context: SwiftSync::default(),
+        };
+
+        let swift_sync = swift_sync.run(|_| {}).await;
+        let swift_sync_failed = swift_sync.was_aborted();
+
+        // Finish IBD with regular utreexo sync
+        let mut sync = UtreexoNode {
+            common: swift_sync.common,
             context: SyncNode::default(),
         };
+
+        // If SwiftSync couldn't complete, we need to validate all blocks from scratch
+        if swift_sync_failed {
+            // Clear the inflight requests and in-memory blocks to start from genesis
+            sync.inflight.clear();
+            sync.blocks.clear();
+            assert_eq!(sync.unprocessed_blocks(), 0);
+        }
 
         let sync = sync.run(|_| {}).await;
 
         // Once we are synced, peer diversity is the priority, as we must be able to discover
-        // newly mined blocks. However, the peer list that we have built during `SyncNode` is
-        // biased towards low-latency peers (often geographically close to our node).
+        // newly mined blocks. However, the peer list that we have built during IBD is biased
+        // towards low-latency peers (often geographically close to our node).
         //
-        // Here we try disconnecting half of our connected peers to open space for new peers.
-        let peers_to_disconnect = sync.connected_peers() / 2;
+        // Keep half the running-mode peer limit to leave room for fresh peers.
+        let peers_to_keep = RunningNode::MAX_OUTGOING_PEERS / 2;
+        let peers_to_disconnect = sync.connected_peers().saturating_sub(peers_to_keep);
         let protected_services = &[service_flags::UTREEXO.into()];
         sync.disconnect_random_peers(peers_to_disconnect, protected_services);
 
@@ -855,6 +874,10 @@ where
                         "Error: `handle_peer_msg_common` should have handled remaining PeerMessages"
                     ),
                 }
+            }
+
+            msg @ NodeNotification::FromWorker { .. } => {
+                error!("Received a notification from the worker thread {msg:?}");
             }
         }
         Ok(())
