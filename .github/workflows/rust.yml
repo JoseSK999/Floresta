@@ -110,6 +110,14 @@ jobs:
             ${{ runner.os }}-cargo-${{ env.CACHE_VERSION }}-
             ${{ runner.os }}-cargo-
 
+      # Debug version, which should be the MSRV
+      - name: Show Rust toolchain
+        shell: bash
+        run: |
+          rustup show active-toolchain
+          rustc -Vv
+          cargo -Vv
+
       # Build only the binaries
       - name: Build binaries
         run: cargo build --release --bins --verbose
