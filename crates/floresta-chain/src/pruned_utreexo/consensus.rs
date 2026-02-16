@@ -520,13 +520,18 @@ impl Consensus {
 
 #[cfg(test)]
 mod tests {
+    use std::fs::File;
+
     use bitcoin::absolute::LockTime;
+    use bitcoin::consensus::deserialize;
     use bitcoin::consensus::encode::deserialize_hex;
+    use bitcoin::constants::genesis_block;
     use bitcoin::hashes::Hash;
     use bitcoin::opcodes::all::OP_NOP;
     use bitcoin::opcodes::OP_TRUE;
     use bitcoin::transaction::Version;
     use bitcoin::Amount;
+    use bitcoin::Network;
     use bitcoin::OutPoint;
     use bitcoin::ScriptBuf;
     use bitcoin::Sequence;
@@ -537,6 +542,8 @@ mod tests {
     use bitcoin::Witness;
     use floresta_common::assert_err;
     use floresta_common::assert_ok;
+    use rand::rngs::OsRng;
+    use rand::seq::SliceRandom;
 
     use super::*;
 
@@ -611,6 +618,56 @@ mod tests {
             lock_time: LockTime::from_height(150_007).unwrap(),
             input: vec![input],
             output: vec![output],
+        }
+    }
+
+    /// Modifies a block to have an invalid output script (txdata is tampered with)
+    fn make_block_invalid(block: &mut Block) {
+        let mut rng = OsRng;
+
+        let tx = block.txdata.choose_mut(&mut rng).unwrap();
+        let out = tx.output.choose_mut(&mut rng).unwrap();
+        let spk = out.script_pubkey.as_mut_bytes();
+        // Random byte from a random scriptPubKey
+        let byte = spk.choose_mut(&mut rng).unwrap();
+
+        *byte += 1;
+    }
+
+    #[test]
+    fn test_check_merkle_root() {
+        fn decode_block(file_path: &str) -> Block {
+            let block_file = File::open(file_path).unwrap();
+            let block_bytes = zstd::decode_all(block_file).unwrap();
+            deserialize(&block_bytes).unwrap()
+        }
+
+        let blocks = [
+            genesis_block(Network::Bitcoin),
+            genesis_block(Network::Testnet),
+            genesis_block(Network::Testnet4),
+            genesis_block(Network::Signet),
+            genesis_block(Network::Regtest),
+            decode_block("./testdata/block_866342/raw.zst"),
+            decode_block("./testdata/block_367891/raw.zst"),
+        ];
+
+        for mut block in blocks {
+            assert!(block.check_merkle_root());
+            let txids = Consensus::check_merkle_root(&block).expect("merkle roots match");
+
+            // Sanity check: the returned txids are the correct ones
+            for (txid, tx) in txids.into_iter().zip(&block.txdata) {
+                assert_eq!(txid, tx.compute_txid());
+            }
+
+            // Modifying the txdata should invalidate the block
+            make_block_invalid(&mut block);
+
+            assert!(!block.check_merkle_root());
+            if Consensus::check_merkle_root(&block).is_some() {
+                panic!("merkle roots shouldn't match");
+            }
         }
     }
 
