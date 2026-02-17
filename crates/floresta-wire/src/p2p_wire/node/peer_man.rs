@@ -558,10 +558,9 @@ where
                 self.request_blocks(vec![block])?;
             }
             InflightRequests::Headers => {
-                let peer = self.send_to_fast_peer(
-                    NodeRequest::GetHeaders(vec![]),
-                    service_flags::UTREEXO.into(),
-                )?;
+                let locator = self.chain.get_block_locator()?;
+                let peer =
+                    self.send_to_fast_peer(NodeRequest::GetHeaders(locator), ServiceFlags::NONE)?;
 
                 self.inflight
                     .insert(InflightRequests::Headers, (peer, Instant::now()));
