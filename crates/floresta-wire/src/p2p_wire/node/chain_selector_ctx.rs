@@ -192,7 +192,7 @@ where
             .entry(peer)
             .and_modify(|e| *e = last)
             .or_insert(last);
-
+        self.last_tip_update = Instant::now();
         self.request_headers(last)
     }
 
@@ -834,6 +834,16 @@ where
             if start.elapsed().as_secs() > 30 {
                 self.context.state = ChainSelectorState::LookingForForks(Instant::now());
                 self.poke_peers()?;
+            }
+        }
+
+        if let ChainSelectorState::DownloadingHeaders = self.context.state {
+            let should_request = self.last_tip_update.elapsed()
+                > Duration::from_secs(ChainSelector::REQUEST_TIMEOUT)
+                && !self.inflight.contains_key(&InflightRequests::Headers);
+
+            if should_request {
+                self.request_headers(self.chain.get_best_block()?.1)?;
             }
         }
 
