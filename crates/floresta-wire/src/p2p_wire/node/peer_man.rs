@@ -97,6 +97,19 @@ where
         Some((id, peer))
     }
 
+    /// Returns how many connected peers we have.
+    ///
+    /// This function will only count peers that completed handshake and are ready
+    /// to be used.
+    pub(crate) fn connected_peers(&self) -> usize {
+        self.peers
+            .values()
+            .filter(|p| {
+                p.state == PeerStatus::Ready && matches!(p.kind, ConnectionKind::Regular(_))
+            })
+            .count()
+    }
+
     /// Sends a request to an initialized peer that supports `required_service`, chosen via a
     /// latency-weighted distribution (lower latency => more likely).
     ///

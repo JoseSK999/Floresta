@@ -51,6 +51,7 @@ use std::time::Instant;
 
 use bitcoin::block::Header;
 use bitcoin::consensus::deserialize;
+use bitcoin::network::Network;
 use bitcoin::p2p::ServiceFlags;
 use bitcoin::Block;
 use bitcoin::BlockHash;
@@ -138,7 +139,7 @@ pub enum PeerCheck {
 
 impl NodeContext for ChainSelector {
     const REQUEST_TIMEOUT: u64 = 60; // Ban peers stalling our IBD
-    const TRY_NEW_CONNECTION: u64 = 10; // Try creating connections more aggressively
+    const TRY_NEW_CONNECTION: u64 = 1; // Try creating connections more aggressively
 
     fn get_required_services(&self) -> ServiceFlags {
         ServiceFlags::NETWORK | service_flags::UTREEXO.into() | service_flags::UTREEXO_FILTER.into()
@@ -192,6 +193,7 @@ where
             .entry(peer)
             .and_modify(|e| *e = last)
             .or_insert(last);
+
         self.last_tip_update = Instant::now();
         self.request_headers(last)
     }
@@ -808,6 +810,20 @@ where
         Ok(())
     }
 
+    /// Whether we have enough peers to start downloading headers
+    fn can_start_headers_sync(&self) -> bool {
+        let connected_peers = self.connected_peers();
+        if self.network == Network::Regtest && connected_peers >= 1 {
+            return true;
+        }
+
+        if self.fixed_peer.is_some() && connected_peers >= 1 {
+            return true;
+        }
+
+        connected_peers >= ChainSelector::MAX_OUTGOING_PEERS
+    }
+
     /// Performs the periodic maintenance tasks, including checking for the cancel signal, peer
     /// connections, and inflight request timeouts.
     ///
@@ -831,15 +847,15 @@ where
         );
 
         if let ChainSelectorState::LookingForForks(start) = self.context.state {
-            if start.elapsed().as_secs() > 30 {
+            if start.elapsed().as_secs() > ChainSelector::REQUEST_TIMEOUT {
                 self.context.state = ChainSelectorState::LookingForForks(Instant::now());
                 self.poke_peers()?;
             }
         }
 
         if let ChainSelectorState::DownloadingHeaders = self.context.state {
-            let should_request = self.last_tip_update.elapsed()
-                > Duration::from_secs(ChainSelector::REQUEST_TIMEOUT)
+            let elapsed = self.last_tip_update.elapsed().as_secs();
+            let should_request = elapsed > ChainSelector::REQUEST_TIMEOUT
                 && !self.inflight.contains_key(&InflightRequests::Headers);
 
             if should_request {
@@ -849,7 +865,7 @@ where
 
         if self.context.state == ChainSelectorState::CreatingConnections {
             // If we have enough peers, try to download headers
-            if !self.peer_ids.is_empty() {
+            if self.can_start_headers_sync() {
                 try_and_log!(self.request_headers(self.chain.get_best_block()?.1));
                 self.context.state = ChainSelectorState::DownloadingHeaders;
             }
