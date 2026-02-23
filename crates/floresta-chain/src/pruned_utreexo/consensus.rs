@@ -7,6 +7,7 @@ extern crate alloc;
 use core::ffi::c_uint;
 
 use bitcoin::block::Header as BlockHeader;
+use bitcoin::blockdata::Weight;
 #[cfg(feature = "bitcoinkernel")]
 use bitcoin::consensus::serialize;
 use bitcoin::hashes::sha256;
@@ -33,10 +34,6 @@ use super::error::BlockchainError;
 use super::udata;
 use crate::pruned_utreexo::utxo_data::UtxoData;
 use crate::TransactionError;
-
-/// The maximum allowed weight for a block, see BIP 141 (network rule), and the [Bitcoin Core
-/// counterpart](https://github.com/bitcoin/bitcoin/blob/v30.2/src/consensus/consensus.h#L15).
-pub const MAX_BLOCK_WEIGHT: u64 = 4_000_000;
 
 /// The version tag to be prepended to the leafhash. It's just the sha512 hash of the string
 /// `UtreexoV1` represented as a vector of [u8] ([85 116 114 101 101 120 111 86 49]).
@@ -327,7 +324,7 @@ impl Consensus {
             return Err(BlockValidationErrors::BadWitnessCommitment)?;
         }
 
-        if block.weight().to_wu() > MAX_BLOCK_WEIGHT {
+        if block.weight() > Weight::MAX_BLOCK {
             return Err(BlockValidationErrors::BlockTooBig)?;
         }
 
