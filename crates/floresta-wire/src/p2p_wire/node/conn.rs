@@ -570,9 +570,14 @@ where
         // try to connect with manually added peers
         self.maybe_open_connection_with_added_peers()?;
 
+        let connection_kind = ConnectionKind::Regular(required_service);
+
         // If the user passes in a `--connect` cli argument, we only connect with
         // that particular peer.
-        if self.fixed_peer.is_some() && !self.peers.is_empty() {
+        if self.fixed_peer.is_some() {
+            if self.peers.is_empty() {
+                self.create_connection(connection_kind)?;
+            }
             return Ok(());
         }
 
@@ -582,7 +587,6 @@ where
         let needs_utreexo = required_service.has(service_flags::UTREEXO.into());
         self.maybe_use_hardcoded_addresses(needs_utreexo);
 
-        let connection_kind = ConnectionKind::Regular(required_service);
         if self.peers.len() < T::MAX_OUTGOING_PEERS {
             self.create_connection(connection_kind)?;
         }

@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
@@ -8,6 +9,7 @@ use bitcoin::consensus::encode;
 use bitcoin::consensus::encode::deserialize_hex;
 use bitcoin::consensus::Decodable;
 use bitcoin::hex::FromHex;
+use bitcoin::p2p::address::AddrV2;
 use bitcoin::p2p::ServiceFlags;
 use bitcoin::Block;
 use bitcoin::BlockHash;
@@ -275,14 +277,14 @@ pub fn signet_roots() -> HashMap<BlockHash, Vec<u8>> {
     accs
 }
 
-/// Returns an invalid signet block that would be at height 7
-pub fn invalid_block_h7() -> Block {
+/// Returns a mutated signet block at height 7
+pub fn mutated_block_h7() -> Block {
     deserialize_hex(
         "00000020daf3b60d374b19476461f97540498dcfa2eb7016238ec6b1d022f82fb60100007a7ae65b53cb988c2ec92d2384996713821d5645ffe61c9acea60da75cd5edfa1a944d5fae77031e9dbb050001010000000001010000000000000000000000000000000000000000000000000000000000000000ffffffff025751feffffff0200f2052a01000000160014ef2dceae02e35f8137de76768ae3345d99ca68860000000000000000776a24aa21a9ede2f61c3f71d1defd3fa999dfa36953755c690689799962b48bebd836974e8cf94c4fecc7daa2490047304402202b3f946d6447f9bf17d00f3696cede7ee70b785495e5498274ee682a493befd5022045fc0bcf9331073168b5d35507175f9f374a8eba2336873885d12aada67ea5f601000120000000000000000000000000000000000000000000000000000000000000000000000000"
     ).unwrap()
 }
 
-#[derive(Constructor)]
+#[derive(Clone, Constructor)]
 /// The chain data that our simulated peer will have
 pub struct PeerData {
     headers: Vec<Header>,
@@ -337,6 +339,11 @@ pub async fn setup_node(
             peer_id,
         );
 
+        // Add a fixed peer to avoid opening real P2P connections
+        if i == 0 {
+            node.fixed_peer = Some(to_addr_v2(peer.address).into());
+        }
+
         node.peers.insert(peer_id, peer);
         // This allows the node to properly assign a message time for the peer
         node.inflight.insert(
@@ -352,13 +359,21 @@ pub async fn setup_node(
     chain
 }
 
+// TODO: remove this after bitcoin-0.33.0
+fn to_addr_v2(addr: IpAddr) -> AddrV2 {
+    match addr {
+        IpAddr::V4(addr) => AddrV2::Ipv4(addr),
+        IpAddr::V6(addr) => AddrV2::Ipv6(addr),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use bitcoin::consensus::deserialize;
     use bitcoin::hashes::Hash;
     use bitcoin::BlockHash;
 
-    use super::invalid_block_h7;
+    use super::mutated_block_h7;
     use super::signet_blocks;
     use super::signet_headers;
     use super::signet_roots;
@@ -391,15 +406,15 @@ mod tests {
     }
 
     #[test]
-    fn test_get_invalid_block() {
-        let invalid_block = invalid_block_h7();
-        assert!(!invalid_block.txdata.is_empty(), "at least one tx");
+    fn test_get_mutated_block() {
+        let mutated_block = mutated_block_h7();
+        assert!(!mutated_block.txdata.is_empty(), "at least one tx");
 
-        assert!(!invalid_block.check_merkle_root(), "invalid merkle root");
+        assert!(!mutated_block.check_merkle_root(), "invalid merkle root");
 
         let headers = signet_headers();
         assert_eq!(
-            invalid_block.header.prev_blockhash,
+            mutated_block.header.prev_blockhash,
             headers[6].block_hash(),
             "invalid block is at height 7",
         );
