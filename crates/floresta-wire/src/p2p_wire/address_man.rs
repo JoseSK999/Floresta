@@ -104,7 +104,7 @@ impl From<AddrV2> for LocalAddress {
             address: value,
             last_connected: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
-                .unwrap()
+                .unwrap_or_default()
                 .as_secs(),
             state: AddressState::NeverTried,
             services: ServiceFlags::NONE,
@@ -149,7 +149,7 @@ impl TryFrom<&str> for LocalAddress {
             ip,
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
-                .unwrap()
+                .unwrap_or_default()
                 .as_secs(),
             super::address_man::AddressState::NeverTried,
             ServiceFlags::NONE,
@@ -361,6 +361,14 @@ impl AddressMan {
         }
     }
 
+    /// Returns the current timestamp since the epoch
+    fn time_since_unix() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+    }
+
     /// Add a new address to our list of known address
     pub fn push_addresses(&mut self, addresses: &[LocalAddress]) {
         for address in addresses {
@@ -559,10 +567,7 @@ impl AddressMan {
         socks5: Option<SocketAddr>,
     ) -> Result<Vec<LocalAddress>, std::io::Error> {
         let mut addresses = Vec::new();
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
+        let now = Self::time_since_unix();
 
         // ask for utreexo peers (if filtering is available)
         if seed.filters.has(service_flags::UTREEXO.into()) {
@@ -671,11 +676,7 @@ impl AddressMan {
                 }
 
                 AddressState::Failed(when) => {
-                    let now = SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .unwrap()
-                        .as_secs();
-
+                    let now = Self::time_since_unix();
                     if when + RETRY_TIME < now {
                         return Some((id, peer));
                     }
@@ -766,10 +767,7 @@ impl AddressMan {
     /// or if we tried to connect to a peer and it failed in the past, but now it might be online
     /// again.
     pub fn rearrange_buckets(&mut self) {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
+        let now = Self::time_since_unix();
 
         for (_, address) in self.addresses.iter_mut() {
             match address.state {
@@ -805,10 +803,7 @@ impl AddressMan {
                 .filter(|&x| {
                     if let Some(address) = self.addresses.get(x) {
                         if let AddressState::Failed(when) = address.state {
-                            let now = SystemTime::now()
-                                .duration_since(UNIX_EPOCH)
-                                .unwrap()
-                                .as_secs();
+                            let now = Self::time_since_unix();
 
                             if (when + RETRY_TIME) < now {
                                 return true;
@@ -878,10 +873,7 @@ impl AddressMan {
             }
             AddressState::Connected => {
                 self.addresses.entry(idx).and_modify(|addr| {
-                    addr.last_connected = SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .unwrap()
-                        .as_secs();
+                    addr.last_connected = Self::time_since_unix();
                 });
 
                 if !self.good_addresses.contains(&idx) {
@@ -1038,16 +1030,16 @@ impl From<LocalAddress> for DiskLocalAddress {
             AddrV2::Unknown(_, _) => Address::V4(Ipv4Addr::LOCALHOST),
         };
 
+        let time = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
         DiskLocalAddress {
             address,
             last_connected: value.last_connected,
             state: if value.state == AddressState::Connected {
-                AddressState::Tried(
-                    SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .unwrap()
-                        .as_secs(),
-                )
+                AddressState::Tried(time)
             } else {
                 value.state
             },
@@ -1190,8 +1182,6 @@ mod test {
     use std::io::Read;
     use std::io::{self};
     use std::net::Ipv4Addr;
-    use std::time::SystemTime;
-    use std::time::UNIX_EPOCH;
 
     use bitcoin::p2p::address::AddrV2;
     use bitcoin::p2p::ServiceFlags;
@@ -1418,10 +1408,7 @@ mod test {
             load_addresses_from_json("./src/p2p_wire/seeds/signet_seeds.json").unwrap();
 
         // modify some addresses to have failed connections in the past
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
+        let now = AddressMan::time_since_unix();
 
         let mut modified_addresses = signet_address.clone();
         let addresses = modified_addresses.len();
