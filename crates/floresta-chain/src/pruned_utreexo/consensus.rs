@@ -554,8 +554,17 @@ mod tests {
         };
     }
 
-    /// Macro for generating a legacy TxIn with an optional sequence number
+    /// Macro for constructing a legacy [`TxIn`] with optional scriptSig and sequence number.
+    /// Needs the outpoint and, if not provided, defaults to empty scriptSig and `Sequence::MAX`.
     macro_rules! txin {
+        ($outpoint:expr) => {
+            TxIn {
+                previous_output: $outpoint,
+                script_sig: ScriptBuf::new(),
+                sequence: Sequence::MAX,
+                witness: Witness::new(),
+            }
+        };
         ($outpoint:expr, $script:expr) => {
             TxIn {
                 previous_output: $outpoint,
@@ -572,6 +581,25 @@ mod tests {
                 witness: Witness::new(),
             }
         };
+    }
+
+    /// Helper for building a zero-locktime transaction given the input and output list.
+    fn build_tx(input: Vec<TxIn>, output: Vec<TxOut>) -> Transaction {
+        Transaction {
+            version: Version::TWO,
+            lock_time: LockTime::ZERO,
+            input,
+            output,
+        }
+    }
+
+    /// Helper to avoid boilerplate in test cases. Note this is not a null outpoint, restricted to
+    /// coinbase transactions only, as that requires the vout to be `u32::MAX`.
+    fn dummy_outpoint() -> OutPoint {
+        OutPoint {
+            txid: Txid::all_zeros(),
+            vout: 0,
+        }
     }
 
     #[cfg(feature = "bitcoinkernel")]
@@ -611,7 +639,7 @@ mod tests {
         let output = txout!(5_000_350_000, output_script);
 
         Transaction {
-            version: Version(1),
+            version: Version::ONE,
             lock_time: LockTime::from_height(150_007).unwrap(),
             input: vec![input],
             output: vec![output],
@@ -839,15 +867,12 @@ mod tests {
 
     #[test]
     fn test_output_value_overflow() {
-        let tx = Transaction {
-            version: Version::TWO,
-            lock_time: LockTime::ZERO,
-            input: vec![txin!(OutPoint::new(Txid::all_zeros(), 0), ScriptBuf::new())],
-            output: vec![
-                txout!(u64::MAX, ScriptBuf::new()),
-                txout!(1, ScriptBuf::new()),
-            ],
-        };
+        let ins = vec![txin!(dummy_outpoint())];
+        let outs = vec![
+            txout!(u64::MAX, ScriptBuf::new()),
+            txout!(1, ScriptBuf::new()),
+        ];
+        let tx = build_tx(ins, outs);
 
         match Consensus::check_transaction_context_free(&tx) {
             Err(BlockchainError::BlockValidation(BlockValidationErrors::TooManyCoins)) => (),
@@ -857,7 +882,7 @@ mod tests {
 
     #[test]
     fn test_input_value_above_max_money() {
-        let outpoint = OutPoint::new(Txid::all_zeros(), 0);
+        let outpoint = dummy_outpoint();
 
         let mut utxos = HashMap::new();
         utxos.insert(
@@ -873,12 +898,7 @@ mod tests {
             },
         );
 
-        let tx = Transaction {
-            version: Version::TWO,
-            lock_time: LockTime::ZERO,
-            input: vec![txin!(outpoint, ScriptBuf::new())],
-            output: vec![txout!(1, ScriptBuf::new())],
-        };
+        let tx = build_tx(vec![txin!(outpoint)], vec![txout!(1, ScriptBuf::new())]);
 
         match Consensus::verify_transaction(&tx, &mut utxos, 0, false, 0) {
             Err(BlockchainError::BlockValidation(BlockValidationErrors::TooManyCoins)) => (),
@@ -956,25 +976,13 @@ mod tests {
     // This test creates an over-sized script, make sure that transaction containing it is valid.
     // Then we try to spend this output, and verify if this causes an error.
     fn test_spending_script_too_big() {
-        fn build_tx(input: TxIn, output: TxOut) -> Transaction {
-            Transaction {
-                version: Version(1),
-                lock_time: LockTime::ZERO,
-                input: vec![input],
-                output: vec![output],
-            }
-        }
-
-        let dummy_outpoint = OutPoint {
-            txid: Txid::all_zeros(),
-            vout: 0,
-        };
+        let outpoint = dummy_outpoint();
         let flags = 0;
         let dummy_height = 0;
 
         let mut utxos = HashMap::new();
         utxos.insert(
-            dummy_outpoint,
+            outpoint,
             UtxoData {
                 txout: txout!(0, true_script()),
                 is_coinbase: false,
@@ -984,9 +992,9 @@ mod tests {
         );
 
         // 1. Build a valid transaction that produces an oversized, unspendable output.
-        let dummy_in = txin!(dummy_outpoint, ScriptBuf::new());
+        let dummy_in = txin!(outpoint);
         let oversized_out = txout!(0, oversized_script());
-        let tx_with_oversized = build_tx(dummy_in, oversized_out.clone());
+        let tx_with_oversized = build_tx(vec![dummy_in], vec![oversized_out.clone()]);
 
         Consensus::verify_transaction(&tx_with_oversized, &mut utxos, dummy_height, false, flags)
             .unwrap();
@@ -1004,8 +1012,8 @@ mod tests {
         );
 
         // 3. Attempt to spend the oversized output.
-        let spending_in = txin!(prevout, ScriptBuf::new());
-        let spending_tx = build_tx(spending_in, txout!(0, true_script()));
+        let spending_in = txin!(prevout);
+        let spending_tx = build_tx(vec![spending_in], vec![txout!(0, true_script())]);
         let err =
             Consensus::verify_transaction(&spending_tx, &mut utxos, dummy_height, false, flags)
                 .unwrap_err();
