@@ -16,6 +16,7 @@ use bitcoin::script;
 use bitcoin::Amount;
 use bitcoin::Block;
 use bitcoin::CompactTarget;
+use bitcoin::Network;
 use bitcoin::OutPoint;
 use bitcoin::ScriptBuf;
 use bitcoin::Target;
@@ -74,6 +75,14 @@ pub struct Consensus {
     /// The parameters of the chain we are validating, it is usually hardcoded
     /// constants. See [ChainParams] for more information.
     pub parameters: ChainParams,
+}
+
+impl From<Network> for Consensus {
+    fn from(network: Network) -> Self {
+        Consensus {
+            parameters: network.into(),
+        }
+    }
 }
 
 impl Consensus {
@@ -539,8 +548,9 @@ mod tests {
     use bitcoin::Witness;
     use floresta_common::assert_err;
     use floresta_common::assert_ok;
-    use rand::rngs::OsRng;
+    use rand::rngs::StdRng;
     use rand::seq::SliceRandom;
+    use rand::SeedableRng;
 
     use super::*;
 
@@ -646,9 +656,9 @@ mod tests {
         }
     }
 
-    /// Modifies a block to have an invalid output script (txdata is tampered with)
-    fn make_block_invalid(block: &mut Block) {
-        let mut rng = OsRng;
+    /// Modifies a block to have a different output script (txdata is tampered with).
+    fn mutate_block(block: &mut Block) {
+        let mut rng = StdRng::seed_from_u64(0x_bebe_cafe);
 
         let tx = block.txdata.choose_mut(&mut rng).unwrap();
         let out = tx.output.choose_mut(&mut rng).unwrap();
@@ -659,14 +669,49 @@ mod tests {
         *byte += 1;
     }
 
+    /// Test helper to update the witness commitment in a block, assuming txdata was modified.
+    /// This ensures `block` is not considered mutated, so we can exercise other error cases.
+    fn update_witness_commitment(block: &mut Block) -> Option<()> {
+        // BIP141 witness-commitment prefix, where the full commitment data is:
+        //  1-byte - OP_RETURN (0x6a)
+        //  1-byte - Push the following 36 bytes (0x24)
+        //  4-byte - Commitment header (0xaa21a9ed)
+        // 32-byte - Commitment hash: Double-SHA256(witness root hash|witness reserved value)
+        const MAGIC: [u8; 6] = [0x6a, 0x24, 0xaa, 0x21, 0xa9, 0xed];
+
+        let coinbase = &block.txdata[0];
+
+        // Commitment is in the last coinbase output that starts with magic bytes.
+        let pos = coinbase.output.iter().rposition(|out| {
+            let spk = out.script_pubkey.as_bytes();
+            spk.len() >= 38 && spk[0..6] == MAGIC
+        })?;
+
+        // Witness reserved value is in coinbase input witness.
+        let witness_rv: &[u8; 32] = {
+            let mut it = coinbase.input[0].witness.iter();
+            match (it.next(), it.next()) {
+                (Some(rv), None) => rv.try_into().ok()?,
+                _ => return None,
+            }
+        };
+
+        let root = block.witness_root()?;
+        let c = *Block::compute_witness_commitment(&root, witness_rv).as_byte_array();
+
+        block.txdata[0].output[pos].script_pubkey.as_mut_bytes()[6..38].copy_from_slice(&c);
+        Some(())
+    }
+
+    /// Decode and deserialize a zstd-compressed block in the given file path.
+    fn decode_block(file_path: &str) -> Block {
+        let block_file = File::open(file_path).unwrap();
+        let block_bytes = zstd::decode_all(block_file).unwrap();
+        deserialize(&block_bytes).unwrap()
+    }
+
     #[test]
     fn test_check_merkle_root() {
-        fn decode_block(file_path: &str) -> Block {
-            let block_file = File::open(file_path).unwrap();
-            let block_bytes = zstd::decode_all(block_file).unwrap();
-            deserialize(&block_bytes).unwrap()
-        }
-
         let blocks = [
             genesis_block(Network::Bitcoin),
             genesis_block(Network::Testnet),
@@ -687,12 +732,62 @@ mod tests {
             }
 
             // Modifying the txdata should invalidate the block
-            make_block_invalid(&mut block);
+            mutate_block(&mut block);
 
             assert!(!block.check_merkle_root());
             if Consensus::check_merkle_root(&block).is_some() {
                 panic!("merkle roots shouldn't match");
             }
+        }
+    }
+
+    /// Modifies historical block at height 866,342 by adding one extra transaction so that the
+    /// updated block weight is 4,000,001 WUs. The block merkle roots are updated accordingly.
+    fn build_oversized_866_342() -> Block {
+        let mut block = decode_block("./testdata/block_866342/raw.zst");
+
+        let consensus = Consensus::from(Network::Bitcoin);
+        consensus.check_block(&block, 866_342).expect("valid block");
+
+        // This block is close but below to the max weight
+        assert_eq!(block.weight().to_wu(), 3_993_209);
+
+        // Modify the block by adding one transaction that makes it exceed the weight limit
+        let mut script_out = ScriptBuf::default();
+        for _ in 0..1_636 {
+            script_out.push_opcode(OP_NOP);
+        }
+        let out = txout!(1, script_out);
+        let tx = build_tx(vec![txin!(dummy_outpoint())], vec![out]);
+
+        block.txdata.insert(1, tx);
+
+        // Update the witness commitment, and then the merkle root, which depends on the former
+        update_witness_commitment(&mut block).expect("should be able to update");
+        block.header.merkle_root = block.compute_merkle_root().unwrap();
+
+        block
+    }
+
+    #[test]
+    fn test_block_too_big() {
+        let height = 866_342;
+        let consensus = Consensus::from(Network::Bitcoin);
+        let block = build_oversized_866_342();
+
+        // This block is now just over the weight limit, by one unit!
+        assert_eq!(block.weight().to_wu(), 4_000_001);
+        assert!(block.weight() > Weight::MAX_BLOCK);
+        assert_eq!(Weight::MAX_BLOCK.to_wu(), 4_000_000);
+
+        // The txdata commitments match
+        assert!(block.check_merkle_root());
+        assert!(block.check_witness_commitment());
+        Consensus::check_merkle_root(&block).expect("merkle root matches");
+
+        match consensus.check_block(&block, height) {
+            Err(BlockchainError::BlockValidation(BlockValidationErrors::BlockTooBig)) => (),
+            other => panic!("We should have `BlockValidationErrors::BlockTooBig`, got {other:?}"),
         }
     }
 
