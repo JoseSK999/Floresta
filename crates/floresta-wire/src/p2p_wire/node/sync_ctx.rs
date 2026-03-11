@@ -14,6 +14,7 @@ use tokio::time;
 use tokio::time::MissedTickBehavior;
 use tracing::debug;
 use tracing::info;
+use tracing::warn;
 
 use crate::node::periodic_job;
 use crate::node::try_and_log;
@@ -266,6 +267,7 @@ where
 
         try_and_log!(self.process_pending_blocks());
         if !self.has_utreexo_peers() {
+            warn!("WE DON'T HAVE UTREEXO PEERS SO WE DON'T VALIDATE A CRAP: {validation_index}");
             return LoopControl::Continue;
         }
 
