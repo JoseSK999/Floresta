@@ -397,10 +397,10 @@ impl Florestad {
         #[cfg(not(feature = "compact-filters"))]
         let cfilters = None;
 
-        // For now, we only have compatible bridges on signet
+        // TODO add support for PoW-FP safely
         let pow_fraud_proofs = match self.config.network {
             Network::Bitcoin => false,
-            Network::Signet => true,
+            Network::Signet => false,
             Network::Testnet => false,
             Network::Testnet4 => false,
             Network::Regtest => false,

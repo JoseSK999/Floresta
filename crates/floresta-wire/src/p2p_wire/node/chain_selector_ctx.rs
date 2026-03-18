@@ -640,11 +640,12 @@ where
                     return Ok(());
                 }
 
-                let has_peers = self
+                let has_utreexo_archive = self
                     .peer_by_service
                     .contains_key(&service_flags::UTREEXO_ARCHIVE.into());
 
-                if self.config.pow_fraud_proofs && has_peers {
+                if self.config.pow_fraud_proofs && has_utreexo_archive {
+                    info!("PoW-FP is enabled and we have `UTREEXO_ARCHIVE`, checking tips");
                     self.check_tips().await?;
                 }
 
