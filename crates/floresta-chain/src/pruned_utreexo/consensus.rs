@@ -39,6 +39,7 @@ use super::chainparams::ChainParams;
 use super::error::BlockValidationErrors;
 use super::error::BlockchainError;
 use super::udata;
+use crate::extensions::Bip30UnspendableExt;
 use crate::pruned_utreexo::utxo_data::UtxoData;
 use crate::swift_sync_agg::SipHashKeys;
 use crate::swift_sync_agg::TxidHashMidstate;
@@ -226,10 +227,15 @@ impl Consensus {
     /// the hints, we can still ensure that the maximum total supply is respected, but this is a
     /// weaker amount check than that of traditional AssumeValid.
     pub fn verify_block_transactions_swiftsync(
-        transactions: &[Transaction],
+        height: u32,
+        block: &Block,
+        txids: Vec<Txid>,
         unspent_indexes: HashSet<u32>,
         salt: &SipHashKeys,
     ) -> Result<(SwiftSyncAgg, Amount), BlockchainError> {
+        let transactions = &block.txdata;
+        assert_eq!(transactions.len(), txids.len());
+
         // Blocks must contain at least one transaction (i.e., the coinbase)
         if transactions.is_empty() {
             return Err(BlockValidationErrors::EmptyBlock)?;
@@ -240,7 +246,7 @@ impl Consensus {
         let mut unspent_amount = Amount::ZERO;
         let mut agg = SwiftSyncAgg::zero();
 
-        for (n, transaction) in transactions.iter().enumerate() {
+        for (n, (transaction, txid)) in transactions.iter().zip(txids).enumerate() {
             if n == 0 {
                 if !transaction.is_coinbase() {
                     return Err(BlockValidationErrors::FirstTxIsNotCoinbase)?;
@@ -252,6 +258,11 @@ impl Consensus {
                 // so we can't check the exact amount here
                 if coinbase_total > Amount::MAX_MONEY {
                     return Err(BlockValidationErrors::TooManyCoins)?;
+                }
+
+                // Skip BIP-30 unspendable coinbase outputs
+                if block.is_bip30_unspendable(height) {
+                    continue;
                 }
             } else {
                 // Verify the non-coinbase transaction and remove the inputs from the aggregator
@@ -281,7 +292,7 @@ impl Consensus {
                 output_index += 1;
             }
             // Only add spent outputs to the aggregator
-            Self::add_outputs_to_agg(salt, &mut agg, transaction, spent_vouts);
+            Self::add_outputs_to_agg(salt, &mut agg, txid, spent_vouts);
         }
 
         Ok((agg, unspent_amount))
@@ -291,23 +302,21 @@ impl Consensus {
     fn add_outputs_to_agg(
         salt: &SipHashKeys,
         agg: &mut SwiftSyncAgg,
-        transaction: &Transaction,
+        txid: Txid,
         spent_vouts: Vec<u32>,
     ) {
-        let txid = || transaction.compute_txid();
-
         match spent_vouts.len() {
             // Nothing needs to be added to the aggregator
             0 => {}
 
             // Only one `OutPoint` to add
-            1 => agg.add(salt, &OutPoint::new(txid(), spent_vouts[0])),
+            1 => agg.add(salt, &OutPoint::new(txid, spent_vouts[0])),
 
             // All `OutPoints` to hash here will share the same txid, only differing in the vout.
             // Thus, we can compute the midstate once, amortizing this cost for all `OutPoints`,
             // which is around 57% less work given enough spent outputs.
             _ => {
-                let midstate = TxidHashMidstate::new(salt, txid().as_byte_array());
+                let midstate = TxidHashMidstate::new(salt, txid.as_byte_array());
                 for vout in spent_vouts {
                     agg.add_with_vout(midstate.clone(), vout);
                 }
@@ -530,9 +539,9 @@ impl Consensus {
         unspent_indexes: HashSet<u32>,
         salt: &SipHashKeys,
     ) -> Result<(SwiftSyncAgg, Amount), BlockchainError> {
-        self.check_block(block, height)?;
+        let txids = self.check_block(block, height)?;
 
-        Consensus::verify_block_transactions_swiftsync(&block.txdata, unspent_indexes, salt)
+        Consensus::verify_block_transactions_swiftsync(height, block, txids, unspent_indexes, salt)
     }
 
     /// Returns the TxOut being spent by the given input.
