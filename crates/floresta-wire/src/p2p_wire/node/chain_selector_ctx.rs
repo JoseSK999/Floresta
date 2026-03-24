@@ -81,6 +81,7 @@ use crate::node::InflightRequests;
 use crate::node::NodeNotification;
 use crate::node::NodeRequest;
 use crate::node::UtreexoNode;
+use crate::node::WitnessMode;
 use crate::node::periodic_job;
 use crate::node_context::LoopControl;
 use crate::node_context::NodeContext;
@@ -454,7 +455,10 @@ where
         peer: PeerId,
         block_hash: BlockHash,
     ) -> Result<InflightBlock, WireError> {
-        self.send_to_peer(peer, NodeRequest::GetBlock(vec![block_hash]))?;
+        self.send_to_peer(
+            peer,
+            NodeRequest::GetBlock(vec![block_hash], WitnessMode::Full),
+        )?;
 
         let timeout = Instant::now() + Duration::from_secs(60);
         let mut block = None;
