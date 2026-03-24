@@ -18,6 +18,7 @@ mod tests {
     use rustreexo::proof::Proof;
     use tokio::time::timeout;
 
+    use crate::node::WitnessMode;
     use crate::node::swift_sync_ctx::SwiftSync;
     use crate::p2p_wire::tests::utils::PeerData;
     use crate::p2p_wire::tests::utils::SetupNodeArgs;
@@ -132,6 +133,7 @@ mod tests {
             // Skipping is not an abort and must not disable witnesses or advance validation
             assert!(!node.was_aborted());
             assert_eq!(node.chain.get_validation_index().unwrap(), 0);
+            assert_eq!(node.witness_mode, WitnessMode::Full);
         }
     }
 
@@ -172,6 +174,7 @@ mod tests {
         assert_eq!(node.chain.get_acc().roots, acc.roots);
         assert_eq!(node.chain.get_acc().leaves, acc.leaves);
         assert_eq!(node.last_block_request, 2);
+        assert_eq!(node.witness_mode, WitnessMode::Full);
     }
 
     /// A header-committed invalid block must abort SwiftSync, unlike a mutated block.

@@ -40,6 +40,7 @@ use crate::node::InflightBlock;
 use crate::node::InflightRequests;
 use crate::node::NodeNotification;
 use crate::node::UtreexoNode;
+use crate::node::WitnessMode;
 use crate::node::WorkerResult;
 use crate::node::oneshot::error::TryRecvError;
 use crate::node::periodic_job;
@@ -312,6 +313,8 @@ where
         // Allow as many worker threads as this machine supports. This is helpful for very high
         // bandwidth connections (e.g., > 1 Gbps). Defaults to 4 workers for unknown CPUs.
         self.context.max_workers = std::thread::available_parallelism().map_or(4, |n| n.get());
+
+        self.witness_mode = WitnessMode::Witnessless; // enable witnessless sync
         self.context.stop_height = hints.stop_height();
 
         self.last_block_request = 0;
@@ -362,6 +365,8 @@ where
             }
         }
 
+        // Ordinary proof sync needs witnesses, including after aborting or stopping SwiftSync.
+        self.witness_mode = WitnessMode::Full;
         done_cb(&self.chain);
         self
     }
