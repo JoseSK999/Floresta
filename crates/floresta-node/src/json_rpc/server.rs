@@ -94,6 +94,7 @@ pub struct RpcImpl<Blockchain: RpcChain> {
     pub(super) start_time: Instant,
     pub(super) user_agent: String,
     pub(super) proxy: Option<SocketAddr>,
+    pub(super) default_connection_is_v2: bool,
 }
 
 type Result<T> = std::result::Result<T, JsonRpcError>;
@@ -308,7 +309,7 @@ async fn handle_json_rpc_request(
         "addnode" => {
             let node = get_at(&params, 0, "node")?;
             let command = get_at(&params, 1, "command")?;
-            let v2transport = get_with_default(&params, 2, "V2transport", false)?;
+            let v2transport = try_into_optional(get_at(&params, 2, "v2transport"))?;
 
             state
                 .add_node(node, command, v2transport)
@@ -669,6 +670,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
         log_path: impl AsRef<Path>,
         user_agent: String,
         proxy: Option<SocketAddr>,
+        default_connection_is_v2: bool,
     ) {
         let address = address.unwrap_or_else(|| {
             format!("127.0.0.1:{}", network.default_rpc_port())
@@ -711,6 +713,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
                 start_time: Instant::now(),
                 user_agent,
                 proxy,
+                default_connection_is_v2,
             }));
 
         axum::serve(listener, router)
