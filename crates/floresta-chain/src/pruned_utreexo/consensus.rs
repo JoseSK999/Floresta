@@ -145,7 +145,8 @@ impl Consensus {
     }
 
     /// A script is unspendable if its length is larger than 10,000 bytes or if it starts with an
-    /// `OP_RETURN`. This follows the [Bitcoin Core implementation](https://github.com/bitcoin/bitcoin/blob/v30.0/src/script/script.h#L571).
+    /// `OP_RETURN`. This follows the
+    /// [Bitcoin Core implementation](https://github.com/bitcoin/bitcoin/blob/v30.0/src/script/script.h#L571).
     pub fn is_unspendable(script: &ScriptBuf) -> bool {
         script.len() > MAX_SCRIPT_SIZE || script.is_op_return()
     }
@@ -217,15 +218,8 @@ impl Consensus {
     /// `OutPoint`s from the aggregator and adds all hinted-as-spent outputs to it.
     ///
     /// Returns the resulting aggregator and the total unspent amount that has been locked in
-    /// this block. This amount can be used at the end of the SwiftSync operation to check that
-    /// the total supply is below the expected limit.
-    ///
-    /// #### Regarding amount checks
-    /// Note that, since we don't have the previous outputs, we can't verify the coinbase reward,
-    /// which requires knowledge of the total fees (out − in amounts). However, after verifying
-    /// the hints, we can still ensure that the maximum total supply is respected, but this is a
-    /// weaker amount check than that of traditional AssumeValid.
-    pub fn verify_block_transactions_swiftsync(
+    /// this block.
+    fn verify_block_transactions_swiftsync(
         height: u32,
         block: &Block,
         txids: Vec<Txid>,
@@ -298,6 +292,10 @@ impl Consensus {
     }
 
     /// Helper to compute the outputs `OutPoint` hashes efficiently and add them to the aggregator.
+    ///
+    /// Returns immediately if `spent_vouts` is empty. Otherwise, adds the corresponding
+    /// `txid:vout` outpoints. For multiple `vout`s, it computes the `txid` hash midstate once and
+    /// reuses it for each `vout`.
     fn add_outputs_to_agg(
         salt: &SipHashKeys,
         agg: &mut SwiftSyncAgg,
@@ -527,10 +525,36 @@ impl Consensus {
         }
     }
 
-    /// Performs AssumeValid SwiftSync validation and returns the resulting [`SwiftSyncAgg`]
-    /// along with the total unspent amount locked in this block.
+    /// Validates a block under AssumeValid SwiftSync, where previous outputs are unavailable,
+    /// using the given `unspent_indexes` hints and the secret, uniformly random `salt`
+    /// chosen for this IBD session.
     ///
-    /// See [`Consensus::verify_block_transactions_swiftsync`] for verification details.
+    /// Returns the resulting [`SwiftSyncAgg`], together with the total unspent amount that
+    /// has been locked in this block (i.e., the amount from outputs that remain unspent
+    /// during SwiftSync).
+    ///
+    /// This performs all consensus checks that do not require previous outputs, then:
+    /// - adds hinted spent outputs to the aggregator,
+    /// - removes all non-coinbase inputs from the aggregator,
+    /// - sums the value locked in hinted unspent outputs **and** unspendable outputs.
+    ///
+    /// The returned amount is used at the end of SwiftSync to check that the total created
+    /// supply does not exceed the expected limit.
+    ///
+    /// #### Regarding amount checks
+    ///
+    /// Since previous outputs are unavailable, this does **not** verify the coinbase reward,
+    /// which depends on total fees (out - in amounts). As a result, the total supply check
+    /// described above is weaker than the amount checks performed in traditional AssumeValid.
+    ///
+    /// In theory, an attacker with majority hashpower and the ability to insert an invalid
+    /// AssumeValid hash into the Floresta codebase could make us accept a chain with excess
+    /// coins by claiming historically unclaimed block rewards, while still staying below the
+    /// maximum theoretical supply that we check.
+    ///
+    /// In practice, this does not materially change the trust model, since an attacker with
+    /// those capabilities could already make us accept invalid scripts and thereby steal far
+    /// more coins than could be created from historically unclaimed block rewards.
     pub fn process_block_swiftsync(
         &self,
         block: &Block,
@@ -779,7 +803,8 @@ pub mod swift_sync_agg {
     ///
     /// Adds and removes `OutPoint`s by hashing the preimage `txid || vout_le` with **two**
     /// `SipHash24` instances. Each instance uses its own independent 128-bit key (together,
-    /// a 32-byte secret).
+    /// a 32-byte secret), which must be uniformly random to avoid adversarially chosen
+    /// collisions.
     ///
     /// The two resulting `u64` values are accumulated into the two 64-bit limbs using
     /// wrapping add/sub. If the same multiset of outpoints is added and removed under the
@@ -787,6 +812,25 @@ pub mod swift_sync_agg {
     ///
     /// The 32-byte [`SipHashKeys`] **must remain constant for the entire session**.
     /// Changing it breaks cancellation.
+    ///
+    /// # Example
+    /// ```
+    /// use bitcoin::hashes::Hash;
+    /// use bitcoin::OutPoint;
+    /// use bitcoin::Txid;
+    /// use floresta_chain::swift_sync_agg::SipHashKeys;
+    /// use floresta_chain::swift_sync_agg::SwiftSyncAgg;
+    ///
+    /// let keys = SipHashKeys::new(1, 2, 3, 4); // use uniformly random keys in production
+    /// let outpoint = OutPoint::new(Txid::all_zeros(), 0);
+    /// let mut agg = SwiftSyncAgg::zero();
+    ///
+    /// agg.add(&keys, &outpoint);
+    /// assert!(!agg.is_zero());
+    ///
+    /// agg.remove(&keys, &outpoint);
+    /// assert!(agg.is_zero());
+    /// ```
     pub struct SwiftSyncAgg(u64, u64);
 
     impl SwiftSyncAgg {
@@ -824,7 +868,7 @@ pub mod swift_sync_agg {
         }
 
         /// Hashes the given `OutPoint` to a pair of `u64` values.
-        pub fn hash_outpoint(keys: &SipHashKeys, outpoint: &OutPoint) -> (u64, u64) {
+        pub(crate) fn hash_outpoint(keys: &SipHashKeys, outpoint: &OutPoint) -> (u64, u64) {
             let mut bytes = [0u8; 36];
             bytes[..32].copy_from_slice(outpoint.txid.as_byte_array());
             bytes[32..36].copy_from_slice(&outpoint.vout.to_le_bytes());
@@ -851,6 +895,7 @@ pub mod swift_sync_agg {
 
     impl Add for SwiftSyncAgg {
         type Output = Self;
+
         #[inline]
         fn add(self, rhs: Self) -> Self::Output {
             self.wrapping_add((rhs.0, rhs.1))
@@ -1422,7 +1467,7 @@ mod tests {
                         .process_block_swiftsync(block, 9, unspent_indexes, &salt)
                         .unwrap();
 
-                    assert!(!agg_blk_9.is_zero(), "block aggregator is not zero");
+                    assert!(!agg_blk_9.is_zero(), "block aggregator shouldn't be zero");
                     assert!(agg.is_zero());
                     agg += agg_blk_9;
                     assert!(!agg.is_zero());
@@ -1436,10 +1481,10 @@ mod tests {
                         .process_block_swiftsync(block, 170, unspent_indexes, &salt)
                         .unwrap();
 
-                    assert!(!agg_blk_170.is_zero(), "block aggregator is not zero");
-                    assert!(!agg.is_zero(), "global aggregator is not zero");
+                    assert!(!agg_blk_170.is_zero(), "block aggregator shouldn't be zero");
+                    assert!(!agg.is_zero(), "global aggregator shouldn't be zero");
                     agg += agg_blk_170;
-                    assert!(agg.is_zero(), "aggregators cancel out to zero");
+                    assert!(agg.is_zero(), "aggregators should cancel out to zero");
 
                     supply += amount;
                 }
@@ -1453,13 +1498,16 @@ mod tests {
                     agg += agg_i;
 
                     if i < 9 {
-                        assert!(agg.is_zero(), "first we don't have TxOuts");
+                        assert!(agg.is_zero(), "we don't have TxOuts, agg should be zero");
                     } else if i < 170 {
-                        assert!(!agg.is_zero(), "then we add TxOut from block 9");
+                        assert!(
+                            !agg.is_zero(),
+                            "we added TxOut from block 9, agg should be non-zero"
+                        );
                     } else {
                         assert!(
                             agg.is_zero(),
-                            "finally, we remove it after finding the input"
+                            "we remove the element after finding the input, agg should be zero"
                         );
                     }
                     supply += amount;
@@ -1482,11 +1530,11 @@ mod tests {
             .process_block_swiftsync(block_170, 170, HashSet::from_iter(vec![0, 1, 2]), &salt)
             .unwrap();
 
-        assert!(!agg_9.is_zero(), "block aggregator is not zero");
-        assert!(!agg_170.is_zero(), "block aggregator is not zero");
+        assert!(!agg_9.is_zero(), "block aggregator shouldn't be zero");
+        assert!(!agg_170.is_zero(), "block aggregator shouldn't be zero");
 
         let agg = agg_9 + agg_170;
-        assert!(agg.is_zero(), "aggregators cancel out to zero");
+        assert!(agg.is_zero(), "aggregators should cancel out to zero");
     }
 
     #[test]
