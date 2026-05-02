@@ -254,10 +254,10 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
         // Methods are in alphabetical order
         match request.method.as_str() {
             "blockchain.block.header" => {
-                let height = get_arg!(request, u64, 0);
+                let height = get_arg!(request, u32, 0);
                 let hash = self
                     .chain
-                    .get_block_hash(height as u32)
+                    .get_block_hash(height)
                     .map_err(|_| super::error::Error::InvalidParams)?;
                 let header = self
                     .chain
@@ -267,27 +267,32 @@ impl<Blockchain: BlockchainInterface> ElectrumServer<Blockchain> {
                 json_rpc_res!(request, header)
             }
             "blockchain.block.headers" => {
-                let start_height = get_arg!(request, u64, 0);
-                let count = get_arg!(request, u64, 1);
-                let mut headers = String::new();
-                let count = if count < 2016 { count } else { 2016 };
-                for height in start_height..(start_height + count) {
-                    let hash = self
-                        .chain
-                        .get_block_hash(height as u32)
-                        .map_err(|_| super::error::Error::InvalidParams)?;
+                const MAX_COUNT: u32 = 2016;
 
-                    let header = self
-                        .chain
-                        .get_block_header(&hash)
-                        .map_err(|e| super::error::Error::Blockchain(Box::new(e)))?;
-                    let header = serialize_hex(&header);
-                    headers.push_str(&header);
-                }
+                let start_height = get_arg!(request, u32, 0);
+                let count = get_arg!(request, u32, 1).min(MAX_COUNT);
+
+                let chain_height = self
+                    .chain
+                    .get_height()
+                    .map_err(|e| super::error::Error::Blockchain(Box::new(e)))?;
+
+                let end_height =
+                    (chain_height.saturating_add(1)).min(start_height.saturating_add(count));
+
+                let heights = start_height..end_height;
+                let count = heights.len();
+
+                let headers = heights.filter_map(|height| {
+                    let hash = self.chain.get_block_hash(height).ok()?;
+                    let header = self.chain.get_block_header(&hash).ok()?;
+                    Some(serialize_hex(&header))
+                });
+
                 json_rpc_res!(request, {
                     "count": count,
-                    "hex": headers,
-                    "max": 2016
+                    "hex": String::from_iter(headers),
+                    "max": MAX_COUNT,
                 })
             }
             "blockchain.estimatefee" => json_rpc_res!(request, 0.0001),
