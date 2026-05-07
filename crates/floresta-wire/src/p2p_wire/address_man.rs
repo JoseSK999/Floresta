@@ -1162,7 +1162,7 @@ pub mod dns_proxy {
         // but the Bitcoin DNS query remains encrypted. Only Google can see the query contents.
         let proxy = Proxy::new(&format!("socks5://{proxy_addr}"))?;
 
-        let crypto = Arc::new(crypto::aws_lc_rs::default_provider());
+        let crypto = Arc::new(crypto::ring::default_provider());
         let tls_config = TlsConfig::builder()
             .provider(TlsProvider::Rustls)
             .unversioned_rustls_crypto_provider(crypto)

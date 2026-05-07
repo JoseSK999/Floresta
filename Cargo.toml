@@ -64,7 +64,7 @@ sha2 = { version = "0.10", default-features = false }
 spin = { version = "0.10", default-features = false, features = ["spin_mutex", "rwlock"] }
 tempfile = "3.23"
 tokio = { version = "1.48", features = ["net", "time", "rt-multi-thread", "signal", "macros"] }
-tokio-rustls = "0.26"
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
 toml = { version = "0.9", default-features = false, features = ["std", "parse", "serde"] }
 tracing = { version = "0.1", default-features = false }
 zstd = "0.13"
