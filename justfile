@@ -137,6 +137,14 @@ pcc:
     just lint-features '-- -D warnings'
     just test-features
     just test-functional
+    just check-flake
+
+# Run nix flake check if nix is available and flake files were modified
+check-flake:
+    @if command -v nix >/dev/null && git diff --name-only HEAD | grep -qE '^flake\.(nix|lock)$'; then \
+        echo "Flake files changed, running nix flake check..."; \
+        nix flake check; \
+    fi
 
 # Must have pandoc installed
 # Needs sudo to overwrite existing man pages
