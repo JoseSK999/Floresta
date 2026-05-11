@@ -45,6 +45,9 @@ use crate::swift_sync_agg::SipHashKeys;
 use crate::swift_sync_agg::TxidHashMidstate;
 use crate::TransactionError;
 
+/// Maximum halving count before the subsidy shift exceeds a `u64`.
+const MAX_SUBSIDY_HALVINGS: u32 = u64::BITS;
+
 /// Maximum script length in bytes, as defined [in Bitcoin Core](https://github.com/bitcoin/bitcoin/blob/v30.0/src/script/script.h#L40).
 const MAX_SCRIPT_SIZE: usize = 10_000;
 
@@ -98,15 +101,16 @@ impl From<Network> for Consensus {
 }
 
 impl Consensus {
-    /// Returns the amount of block subsidy to be paid in a block, given it's height.
+    /// Returns the amount of block subsidy to be paid in a block, given its height.
     ///
     /// The Bitcoin Core source can be found [here](https://github.com/bitcoin/bitcoin/blob/2b211b41e36f914b8d0487e698b619039cc3c8e2/src/validation.cpp#L1501-L1512).
     pub fn get_subsidy(&self, height: u32) -> Amount {
-        let halvings = height / self.parameters.subsidy_halving_interval as u32;
+        let halvings = height / self.parameters.subsidy_halving_interval.get();
         // Force block reward to zero when right shift is undefined.
-        if halvings >= 64 {
+        if halvings >= MAX_SUBSIDY_HALVINGS {
             return Amount::ZERO;
         }
+
         let mut subsidy = 50 * Amount::ONE_BTC.to_sat();
         // Subsidy is cut in half every 210,000 blocks which will occur approximately every 4 years.
         subsidy >>= halvings;
@@ -114,33 +118,37 @@ impl Consensus {
     }
 
     /// Maximum theoretical supply at the given height. Excludes the unspendable genesis subsidy.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `height` is `u32::MAX`.
     pub fn max_supply_at_height(&self, height: u32) -> Amount {
-        let blocks_per_epoch = self.parameters.subsidy_halving_interval;
-        let block_count = u64::from(height) + 1; // inclusive of height 0
+        let blocks_per_epoch = self.parameters.subsidy_halving_interval.get();
+
+        // Block count includes the genesis block
+        let block_count = height.checked_add(1).expect("height must be < u32::MAX");
 
         // Full epochs completely included + remainder blocks in the next epoch
         let full_epochs = block_count / blocks_per_epoch;
         let rem_blocks = block_count % blocks_per_epoch;
 
-        let epoch_subsidy =
-            |epoch: u64| self.get_subsidy((blocks_per_epoch * epoch) as u32).to_sat();
+        let epoch_subsidy = |epoch: u32| self.get_subsidy(blocks_per_epoch * epoch).to_sat();
 
         let mut total: u64 = 0;
 
-        // Sum all full epochs that still pay (before epoch 64)
-        for epoch in 0..full_epochs.min(64) {
-            let epoch_supply = blocks_per_epoch.saturating_mul(epoch_subsidy(epoch));
-            total = total.saturating_add(epoch_supply);
+        // Sum full epochs before the subsidy shift limit
+        for epoch in 0..full_epochs.min(MAX_SUBSIDY_HALVINGS) {
+            total += u64::from(blocks_per_epoch) * epoch_subsidy(epoch);
         }
 
-        // Add remainder in the current epoch if it still pays
-        if full_epochs < 64 {
-            let partial_epoch_supply = rem_blocks.saturating_mul(epoch_subsidy(full_epochs));
-            total = total.saturating_add(partial_epoch_supply);
+        // Add remainder in the current epoch, if before the subsidy shift limit
+        if full_epochs < MAX_SUBSIDY_HALVINGS {
+            total += u64::from(rem_blocks) * epoch_subsidy(full_epochs);
         }
 
-        // Remove genesis coinbase subsidy
-        total = total.saturating_sub(epoch_subsidy(0));
+        // Exclude the unspendable genesis subsidy, which was included above
+        total -= epoch_subsidy(0);
+
         Amount::from_sat(total)
     }
 
@@ -1708,7 +1716,7 @@ mod tests {
     #[test]
     fn test_max_supply_at_height() {
         let consensus = Consensus::from(Network::Bitcoin);
-        assert_eq!(consensus.parameters.subsidy_halving_interval, 210_000);
+        assert_eq!(consensus.parameters.subsidy_halving_interval.get(), 210_000);
 
         let subsidy_0 = consensus.get_subsidy(0);
         let subsidy_1 = consensus.get_subsidy(210_000);
@@ -1753,6 +1761,6 @@ mod tests {
         assert_eq!(consensus.max_supply_at_height(13_440_001), max_coins);
         assert_eq!(consensus.max_supply_at_height(13_444_444), max_coins);
         assert_eq!(consensus.max_supply_at_height(1_300_440_000), max_coins);
-        assert_eq!(consensus.max_supply_at_height(u32::MAX), max_coins);
+        assert_eq!(consensus.max_supply_at_height(u32::MAX - 1), max_coins);
     }
 }
