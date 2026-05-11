@@ -17,6 +17,7 @@ use alloc::vec::Vec;
 use core::ffi::c_uint;
 
 use bitcoin::blockdata::constants::genesis_block;
+use bitcoin::constants::SUBSIDY_HALVING_INTERVAL;
 use bitcoin::p2p::ServiceFlags;
 use bitcoin::params::Params;
 use bitcoin::Block;
@@ -30,6 +31,24 @@ use rustreexo::node_hash::BitcoinNodeHash;
 use crate::prelude::*;
 use crate::AssumeValidArg;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SubsidyHalvingInterval {
+    /// Bitcoin, testnet, testnet4, and signet: 210,000 blocks.
+    Bitcoin,
+
+    /// Regtest: 150 blocks.
+    Regtest,
+}
+
+impl SubsidyHalvingInterval {
+    pub const fn get(self) -> u32 {
+        match self {
+            Self::Bitcoin => SUBSIDY_HALVING_INTERVAL,
+            Self::Regtest => 150,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 /// This struct encapsulates all chain-specific parameters.
 pub struct ChainParams {
@@ -40,7 +59,7 @@ pub struct ChainParams {
     pub genesis: Block,
 
     /// Interval of blocks until the block reward halves
-    pub subsidy_halving_interval: u64,
+    pub subsidy_halving_interval: SubsidyHalvingInterval,
 
     /// When we retarget we expect this many seconds to be elapsed since last time. If
     /// it's more, we decrease difficulty, if it's less we increase difficulty
@@ -316,7 +335,7 @@ impl From<Network> for ChainParams {
                 network,
                 genesis,
                 pow_target_timespan: 14 * 24 * 60 * 60, // two weeks
-                subsidy_halving_interval: 210_000,
+                subsidy_halving_interval: SubsidyHalvingInterval::Bitcoin,
                 coinbase_maturity: 100,
                 segwit_activation_height: 481_824,
                 csv_activation_height: 419_328,
@@ -328,7 +347,7 @@ impl From<Network> for ChainParams {
                 network,
                 genesis,
                 pow_target_timespan: 14 * 24 * 60 * 60, // two weeks
-                subsidy_halving_interval: 210_000,
+                subsidy_halving_interval: SubsidyHalvingInterval::Bitcoin,
                 coinbase_maturity: 100,
                 segwit_activation_height: 834_624,
                 csv_activation_height: 770_112,
@@ -340,7 +359,7 @@ impl From<Network> for ChainParams {
                 network,
                 genesis,
                 pow_target_timespan: 14 * 24 * 60 * 60,
-                subsidy_halving_interval: 210_000,
+                subsidy_halving_interval: SubsidyHalvingInterval::Bitcoin,
                 coinbase_maturity: 100,
                 segwit_activation_height: 1,
                 csv_activation_height: 1,
@@ -352,7 +371,7 @@ impl From<Network> for ChainParams {
                 network,
                 genesis,
                 pow_target_timespan: 14 * 24 * 60 * 60, // two weeks
-                subsidy_halving_interval: 210_000,
+                subsidy_halving_interval: SubsidyHalvingInterval::Bitcoin,
                 coinbase_maturity: 100,
                 csv_activation_height: 1,
                 segwit_activation_height: 1,
@@ -364,7 +383,7 @@ impl From<Network> for ChainParams {
                 network,
                 genesis,
                 pow_target_timespan: 14 * 24 * 60 * 60, // two weeks
-                subsidy_halving_interval: 150,
+                subsidy_halving_interval: SubsidyHalvingInterval::Regtest,
                 coinbase_maturity: 100,
                 csv_activation_height: 0,
                 segwit_activation_height: 0,
