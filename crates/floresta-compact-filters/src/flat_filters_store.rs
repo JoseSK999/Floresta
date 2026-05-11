@@ -7,6 +7,7 @@ use std::io::Read;
 use std::io::Seek;
 use std::io::SeekFrom;
 use std::io::Write;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::sync::MutexGuard;
@@ -64,28 +65,35 @@ impl From<PoisonError<MutexGuard<'_, FlatFiltersStoreInner>>> for IterableFilter
 pub struct FlatFiltersStore(Mutex<FlatFiltersStoreInner>);
 
 impl FlatFiltersStore {
-    pub fn new(path: PathBuf) -> Self {
+    pub fn new(path: impl AsRef<Path>) -> Self {
+        let path = path.as_ref();
+
         let file = std::fs::OpenOptions::new()
             .read(true)
             .write(true)
             .create(true)
             .truncate(false)
-            .open(&path)
+            .open(path)
             .unwrap();
 
-        let index = format!("{}-index", path.to_string_lossy());
+        let mut index_path = path.as_os_str().to_owned();
+        index_path.push("-index");
         let mut index = std::fs::OpenOptions::new()
             .read(true)
             .write(true)
             .create(true)
             .truncate(false)
-            .open(index)
+            .open(&index_path)
             .unwrap();
 
         index.seek(SeekFrom::Start(0)).unwrap();
         index.write_all(&4_u64.to_le_bytes()).unwrap();
 
-        Self(Mutex::new(FlatFiltersStoreInner { file, path, index }))
+        Self(Mutex::new(FlatFiltersStoreInner {
+            file,
+            path: path.into(),
+            index,
+        }))
     }
 }
 
@@ -220,7 +228,7 @@ mod tests {
     #[test]
     fn test_filter_store() {
         let path = "test_filter_store";
-        let store = FlatFiltersStore::new(path.into());
+        let store = FlatFiltersStore::new(path);
 
         let res = store.get_height().unwrap_err();
         assert!(matches!(res, crate::IterableFilterStoreError::Io(_)));
