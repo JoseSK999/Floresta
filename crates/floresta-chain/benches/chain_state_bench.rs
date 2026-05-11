@@ -68,7 +68,7 @@ fn setup_test_chain(
         fork_file_size: Some(10_000), // Will be rounded up to 16,384
         cache_size: Some(10),
         file_permission: Some(0o660),
-        path: format!("./tmp-db/{test_id}/"),
+        path: format!("./tmp-db/{test_id}/").into(),
     };
 
     let chainstore = FlatChainStore::new(config).unwrap();

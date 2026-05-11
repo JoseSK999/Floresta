@@ -300,7 +300,7 @@ pub async fn setup_node(
     datadir: &str,
     num_blocks: usize,
 ) -> Arc<ChainState<FlatChainStore>> {
-    let config = FlatChainStoreConfig::new(datadir.into());
+    let config = FlatChainStoreConfig::new(datadir);
 
     let chainstore = FlatChainStore::new(config).unwrap();
     let mempool = Arc::new(Mutex::new(Mempool::new(1000)));
