@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
 [Unit]
 Description=Floresta: A Lightweight Utreexo-powered Bitcoin full node implementation
 Documentation=https://github.com/getfloresta/Floresta

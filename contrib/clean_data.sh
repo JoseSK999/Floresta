@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
 #!/bin/bash
 
 # Find all 'tmp-db' directories in subdirectories

@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+name: Commits
+
+on:
+  pull_request:
+
+permissions: {}
+
+jobs:
+    commit-signatures:
+        name: Commit Signatures
+        runs-on: ubuntu-latest
+
+        steps:
+            - name: Checkout Repository
+              uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+              with:
+                  persist-credentials: false
+                  fetch-depth: 0
+
+            - name: Check Commit Signatures
+              run: bash contrib/commit-signatures.sh
+
+    conventional-commits:
+        name: Conventional Commits
+        runs-on: ubuntu-latest
+
+        steps:
+            - name: Checkout Repository
+              uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+            - name: Check Commit Messages
+              uses: webiny/action-conventional-commits@7f91b1595ca1951cdb671ddc9f07a49081ec5b69 # v1.4.2
+              with:
+                  allowed-commit-types: "feat,fix,docs,style,refactor,test,perf,ci,chore,fuzz,bench"
