@@ -1563,7 +1563,7 @@ mod test {
             fork_file_size: Some(10_000), // Will be rounded up to 16,384
             cache_size: Some(10),
             file_permission: Some(0o660),
-            path: format!("./tmp-db/{test_id}/"),
+            path: format!("./tmp-db/{test_id}/").into(),
         };
 
         let chainstore = FlatChainStore::new(config).unwrap();
@@ -1828,7 +1828,7 @@ mod test {
             fork_file_size: Some(10_000),
             cache_size: Some(10),
             file_permission: Some(0o660),
-            path: path.clone(),
+            path: path.clone().into(),
         };
         let chain = ChainState::open(
             crate::FlatChainStore::new(config).unwrap(),
@@ -1859,7 +1859,7 @@ mod test {
             fork_file_size: Some(10_000),
             cache_size: Some(10),
             file_permission: Some(0o660),
-            path,
+            path: path.into(),
         };
         let chain2 = ChainState::open(
             crate::FlatChainStore::new(config2).unwrap(),
@@ -1922,7 +1922,7 @@ mod test {
     #[test]
     fn test_calculate_chain_work() {
         let mut chainstore = FlatChainStore::new(FlatChainStoreConfig::new(
-            "../../testdata/signet_headers.zst".to_string(),
+            "../../testdata/signet_headers.zst",
         ))
         .unwrap();
 

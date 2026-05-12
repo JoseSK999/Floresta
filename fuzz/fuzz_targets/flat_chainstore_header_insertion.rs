@@ -138,7 +138,7 @@ fuzz_target!(|input: FuzzInput| {
         fork_file_size: Some(64),
         cache_size: Some(15),
         file_permission: Some(0o666),
-        path: temp_dir.path().to_str().unwrap().to_string(),
+        path: temp_dir.path().into(),
     };
 
     let mut store = match FlatChainStore::new(config) {

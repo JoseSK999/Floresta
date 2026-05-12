@@ -88,6 +88,7 @@ use std::io::SeekFrom;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Mutex;
 use std::sync::MutexGuard;
 use std::sync::PoisonError;
@@ -179,19 +180,19 @@ pub struct FlatChainStoreConfig {
     /// We'll create a few files (namely, the index map, headers file, forks file, and metadata file).
     /// We need a directory where we can read and write, it needs at least 880 MiB of free space.
     /// And have a file system that supports mmap and sparse files (all the default *unix FS do).
-    pub path: String,
+    pub path: PathBuf,
 }
 
 impl FlatChainStoreConfig {
     /// Creates a new configuration with the default values
-    pub fn new(path: String) -> Self {
+    pub fn new(path: impl AsRef<Path>) -> Self {
         FlatChainStoreConfig {
             file_permission: Some(0o666),
             fork_file_size: Some(10_000),
-            path,
             headers_file_size: Some(10_000_000),
             block_index_size: Some(10_000_000),
             cache_size: Some(10_000),
+            path: path.as_ref().into(),
         }
     }
 }
@@ -614,9 +615,9 @@ impl FlatChainStore {
     /// If any of the I/O operations fail, this function should return an error
     fn create_chain_store(config: FlatChainStoreConfig) -> Result<Self, FlatChainstoreError> {
         let file_mode = config.file_permission.unwrap_or(0o600);
-        let dir = &config.path;
+        let datadir: &Path = config.path.as_ref();
 
-        DirBuilder::new().recursive(true).create(dir)?;
+        DirBuilder::new().recursive(true).create(datadir)?;
 
         let index_size = config
             .block_index_size
@@ -633,11 +634,11 @@ impl FlatChainStore {
             .map(Self::truncate_to_pow2)
             .unwrap_or(Self::truncate_to_pow2(10_000));
 
-        let index_path = format!("{dir}/blocks_index.bin");
-        let headers_path = format!("{dir}/headers.bin");
-        let metadata_path = format!("{dir}/metadata.bin");
-        let fork_headers_path = format!("{dir}/fork_headers.bin");
-        let accumulator_file_path = format!("{dir}/accumulators.bin");
+        let index_path = datadir.join("blocks_index.bin");
+        let headers_path = datadir.join("headers.bin");
+        let metadata_path = datadir.join("metadata.bin");
+        let fork_headers_path = datadir.join("fork_headers.bin");
+        let accumulator_file_path = datadir.join("accumulators.bin");
 
         let index_map_file_size = index_size * size_of::<u32>();
         let index_map = unsafe { Self::init_file(&index_path, index_map_file_size, file_mode)? };
@@ -699,8 +700,8 @@ impl FlatChainStore {
 
     /// Opens a new storage. If it already exists, just load. If not, create a new one
     pub fn new(config: FlatChainStoreConfig) -> Result<Self, FlatChainstoreError> {
-        let dir = &config.path;
-        let metadata_path = format!("{dir}/metadata.bin");
+        let datadir = &config.path;
+        let metadata_path = datadir.join("metadata.bin");
         let file_mode = config.file_permission.unwrap_or(0o600);
 
         // Maybe migrate our database if it's the old version 0
@@ -735,10 +736,10 @@ impl FlatChainStore {
             return Err(FlatChainstoreError::BadMagic(metadata.magic));
         }
 
-        let index_path = format!("{}/blocks_index.bin", config.path);
-        let headers_file_path = format!("{}/headers.bin", config.path);
-        let fork_file_path = format!("{}/fork_headers.bin", config.path);
-        let accumulator_file_path = format!("{}/accumulators.bin", config.path);
+        let index_path = datadir.join("blocks_index.bin");
+        let headers_file_path = datadir.join("headers.bin");
+        let fork_file_path = datadir.join("fork_headers.bin");
+        let accumulator_file_path = datadir.join("accumulators.bin");
 
         let index_file_size = metadata.index_capacity * size_of::<u32>();
         let headers_file_size = metadata.headers_file_size * size_of::<HashedDiskHeader>();
@@ -859,7 +860,7 @@ impl FlatChainStore {
     /// Initializes a memory-mapped file with the specified byte size and permissions (mode).
     /// If the underlying file does not exist, it will be created.
     unsafe fn init_file(
-        path: &str,
+        path: impl AsRef<Path>,
         size: usize,
         _mode: u32,
     ) -> Result<MmapMut, FlatChainstoreError> {
@@ -1316,8 +1317,13 @@ pub mod migrate_v0_to_v1 {
     /// If `metadata.bin` is exactly the old size, rename to `.bin.old`, mmap it as `MetadataV0`,
     /// then create a fresh v1 file and copy all fields except the deprecated u32. Returns a bool
     /// indicating whether a migration was performed or not.
-    pub fn maybe_migrate(path: &str, mode: u32) -> Result<bool, FlatChainstoreError> {
-        match fs::metadata(path) {
+    pub fn maybe_migrate(
+        metadata_path: impl AsRef<Path>,
+        mode: u32,
+    ) -> Result<bool, FlatChainstoreError> {
+        let metadata_path = metadata_path.as_ref();
+
+        match fs::metadata(metadata_path) {
             // No db found, nothing to migrate from
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(false),
             // Propagate the rest of errors
@@ -1328,15 +1334,16 @@ pub mod migrate_v0_to_v1 {
         }
 
         // 1) back up
-        let backup = Path::new(path).with_extension("bin.old");
-        fs::rename(path, &backup)?;
+        let metadata_backup_path = Path::new(metadata_path).with_extension("bin.old");
+        fs::rename(metadata_path, &metadata_backup_path)?;
 
         // 2) read old struct
-        let mmap = init_mmap(&backup, size_of::<MetadataV0>())?;
+        let mmap = init_mmap(&metadata_backup_path, size_of::<MetadataV0>())?;
         let old_meta = unsafe { &*(mmap.as_ptr() as *const MetadataV0) };
 
         // 3) create new v1 mmap
-        let mut new_mmap = unsafe { FlatChainStore::init_file(path, size_of::<Metadata>(), mode)? };
+        let mut new_mmap =
+            unsafe { FlatChainStore::init_file(metadata_path, size_of::<Metadata>(), mode)? };
         let new_meta = unsafe { &mut *(new_mmap.as_mut_ptr() as *mut Metadata) };
 
         // 4) copy everything but the deprecated u32, bump version
@@ -1427,7 +1434,7 @@ mod tests {
             fork_file_size: Some(10_000), // Will be rounded up to 16,384
             cache_size: Some(10),
             file_permission: Some(0o660),
-            path: format!("./tmp-db/{test_id}/"),
+            path: format!("./tmp-db/{test_id}/").into(),
         };
 
         FlatChainStore::new(config)
