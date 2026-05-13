@@ -42,7 +42,6 @@
                 typos
                 python312
                 uv
-                gcc
                 go
                 cargo-hack
                 pkg-config
