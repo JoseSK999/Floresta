@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 use std::collections::BTreeMap;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 use bitcoin::Address;
 use bitcoin::Block;
@@ -270,11 +272,7 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
             .calculate_chain_work(&self.chain)?
             .to_string_hex();
 
-        let verification_progress = if height != 0 {
-            f64::from(validated) / f64::from(height)
-        } else {
-            0.0
-        };
+        let verification_progress = self.verification_progress(validated, &latest_header)?;
 
         let blocks = i64::from(validated);
         let headers = i64::from(height);
@@ -737,5 +735,44 @@ impl<Blockchain: RpcChain> RpcImpl<Blockchain> {
             .get_descriptors()
             .map_err(|e| JsonRpcError::Wallet(e.to_string()))?;
         Ok(descriptors)
+    }
+
+    /// Time-based estimate of validated-tip progress in `[0.0, 1.0]`.
+    ///
+    /// Ratio of chain-time elapsed between genesis and the validated block,
+    /// over chain-time between genesis and the later of `now` or the tip
+    /// header's time. Returns `0.0` for cold start, clamps to `1.0` at tip.
+    fn verification_progress(
+        &self,
+        validated: u32,
+        latest_header: &Header,
+    ) -> Result<f64, JsonRpcError> {
+        let header_tip_time = latest_header.time;
+
+        let validated_block_time = self
+            .chain
+            .get_block_hash(validated)
+            .and_then(|hash| self.chain.get_block_header(&hash))
+            .map_err(|_| JsonRpcError::Chain)?
+            .time;
+
+        let genesis_time = genesis_block(self.network).header.time;
+        let now: u32 = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|_| JsonRpcError::InvalidSystemTime)?
+            .as_secs()
+            .try_into()
+            .map_err(|_| JsonRpcError::InvalidSystemTime)?;
+
+        let elapsed_validated = validated_block_time.saturating_sub(genesis_time);
+        let elapsed_total = now.max(header_tip_time).saturating_sub(genesis_time);
+
+        // Cold start: the tip is still genesis and the clock has not reached
+        // genesis time, so there is no span to measure against.
+        if elapsed_total == 0 {
+            return Ok(0.0);
+        }
+
+        Ok((f64::from(elapsed_validated) / f64::from(elapsed_total)).clamp(0.0, 1.0))
     }
 }

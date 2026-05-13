@@ -41,7 +41,7 @@ Returns a JSON object with the following fields:
 
 - `chain` - (string) A short string representing the blockchain network (e.g., "bitcoin", "testnet", "signet").
 
-- `verificationprogress` - (numeric) The validation progress as a decimal between 0 and 1. A value of 0 means no blocks have been validated, while 1 means all blocks are validated (headers == blocks).
+- `verificationprogress` - (numeric) An estimate of validation progress as a decimal between 0 and 1, computed from block timestamps rather than heights. It is the time from genesis to the validated block, over the time from genesis to the later of the current clock or the header tip.
 
 - `difficulty` - (numeric) The current network difficulty. On average, miners need to make `difficulty` hashes before finding one that solves a block's Proof-of-Work.
 
@@ -71,6 +71,7 @@ Returns a JSON object with the following fields:
 - `JsonRpcError::ChainWorkOverflow` - Overflow occurred while calculating accumulated chain work
 - `JsonRpcError::BlockNotFound` - The requested block hash was not found in the blockchain
 - `JsonRpcError::Chain` - If there's an error accessing blockchain data.
+- `JsonRpcError::InvalidSystemTime` - The system clock is set before the Unix epoch, or past the u32 range block timestamps use
 
 ## Notes
 
@@ -80,4 +81,5 @@ Returns a JSON object with the following fields:
 - `warnings` is hardcoded to `[]`. Floresta does not currently pipe network or node warnings here.
 - `signet_challenge` is hardcoded to `null`. Floresta does not currently expose the signet challenge script.
 - `blocks`, `headers`, `difficulty`, `mediantime`, `bits`, `target`, and `chainwork` are dynamically calculated and behave identically to Bitcoin Core.
+- `verificationprogress` is time-based, unlike Bitcoin Core's transaction-weighted estimate, so the two will not return identical values for the same chain state. Since the denominator tracks the current clock, a stalled node reports a declining value instead of holding at 1.0.
 - `size_on_disk` is the sum, in bytes, of Floresta's chainstore files: the main-chain header records, the fork-header records, the block index, the metadata file, and the accumulator file.

@@ -232,6 +232,10 @@ pub mod jsonrpc_interface {
         /// Overflow when calculating cumulative chain work.
         ChainWorkOverflow,
 
+        /// The system clock is unusable: set before the Unix epoch, or past
+        /// the u32 timestamp range that block headers use.
+        InvalidSystemTime,
+
         /// Invalid `addnode` command or parameters.
         InvalidAddnodeCommand,
 
@@ -289,7 +293,7 @@ pub mod jsonrpc_interface {
                 | Self::PeerNotFound => StatusCode::NOT_FOUND,
 
                 // 500 Internal Server Error - server messed up
-                Self::ChainWorkOverflow | Self::ConversionOverflow(_) => {
+                Self::ChainWorkOverflow | Self::ConversionOverflow(_) | Self::InvalidSystemTime => {
                     StatusCode::INTERNAL_SERVER_ERROR
                 }
 
@@ -403,6 +407,11 @@ pub mod jsonrpc_interface {
                 Self::ChainWorkOverflow => RpcError {
                     code: INTERNAL_ERROR,
                     message: "Chain work overflow".into(),
+                    data: None,
+                },
+                Self::InvalidSystemTime => RpcError {
+                    code: INTERNAL_ERROR,
+                    message: "System clock is outside the representable range".into(),
                     data: None,
                 },
                 Self::ConversionOverflow(msg) => RpcError {
