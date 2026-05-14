@@ -9,8 +9,6 @@ use bitcoin::p2p::ServiceFlags;
 use floresta_chain::proof_util;
 use floresta_chain::ThreadSafeChain;
 use floresta_common::service_flags;
-use rand::seq::IteratorRandom;
-use rand::thread_rng;
 use tokio::time;
 use tokio::time::MissedTickBehavior;
 use tracing::debug;
@@ -21,7 +19,6 @@ use crate::node::try_and_log;
 use crate::node::ConnectionKind;
 use crate::node::InflightRequests;
 use crate::node::NodeNotification;
-use crate::node::NodeRequest;
 use crate::node::UtreexoNode;
 use crate::node_context::LoopControl;
 use crate::node_context::NodeContext;
@@ -139,30 +136,22 @@ where
     /// This function will periodically check our connections, to ensure that:
     ///   - we have enough utreexo peers to download proofs from (at least 2)
     ///   - we have enough peers to download blocks from (at most `MAX_OUTGOING_PEERS`)
-    ///   - if some of peers are too slow, and potentially stalling our block download (TODO)
+    ///   - we disconnect from peers that are too slow, which could otherwise slow down our IBD
     fn check_connections(&mut self) -> Result<(), WireError> {
-        let total_peers = self.connected_peers();
         let utreexo_peers = self
             .peer_by_service
             .get(&service_flags::UTREEXO.into())
             .map_or(0, |peers| peers.len());
 
-        if utreexo_peers < 2 && total_peers >= SyncNode::MAX_OUTGOING_PEERS {
-            // if we have more than the maximum number of outgoing peers, disconnect
-            // some non-utreexo peers.
-            //
-            // FIXME: We should actually disconnect the slowest non-utreexo peer, to
-            // make sure we can download blocks faster.
-            self.peers
-                .values()
-                .filter(|peer| {
-                    peer.is_regular_peer() && !peer.services.has(service_flags::UTREEXO.into())
-                })
-                .choose(&mut thread_rng())
-                .and_then(|p| p.channel.send(NodeRequest::Shutdown).ok());
+        let needs_utreexo = utreexo_peers < 2;
+        if self.connected_peers() >= SyncNode::MAX_OUTGOING_PEERS {
+            // If we need more utreexo peers, always disconnect to the slowest peer. Else, only
+            // disconnect if it's very slow or with 5% probability (roughly once each 200s).
+            let always_disconnect = needs_utreexo;
+            self.maybe_disconnect_slowest_peer(always_disconnect)?;
         }
 
-        if utreexo_peers < 2 {
+        if needs_utreexo {
             info!("Not enough utreexo peers (we have {utreexo_peers}), opening a new connection");
             self.maybe_open_connection(service_flags::UTREEXO.into())?;
         }
