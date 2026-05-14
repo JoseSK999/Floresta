@@ -15,6 +15,7 @@ use floresta_chain::ChainBackend;
 use floresta_common::service_flags;
 use floresta_common::Ema;
 use floresta_mempool::Mempool;
+use rand::Rng;
 use tokio::net::tcp::WriteHalf;
 use tokio::spawn;
 use tokio::sync::mpsc::unbounded_channel;
@@ -630,6 +631,53 @@ where
         }
 
         Ok(())
+    }
+
+    /// Try disconnecting the slowest non-utreexo peer (i.e., the highest-latency peer).
+    ///
+    /// We disconnect the highest-latency peer when any of these hold:
+    /// - Its latency is more than 1.5x the median latency across eligible peers.
+    /// - `always` is true.
+    /// - Or randomly, with 5% probability.
+    pub(crate) fn maybe_disconnect_slowest_peer(&self, always: bool) -> Result<(), WireError> {
+        const MIN_SAMPLES: usize = 5;
+        const SLOW_THRESHOLD_MUL: f64 = 1.5;
+
+        // Use latency samples only from regular, non-UTREEXO peers.
+        let is_eligible_peer = |peer: &LocalPeerView| {
+            peer.is_regular_peer() && !peer.services.has(service_flags::UTREEXO.into())
+        };
+
+        let mut samples: Vec<_> = self
+            .peers
+            .iter()
+            .filter_map(|(&peer_id, peer)| {
+                let latency = peer.message_times.value()?;
+
+                is_eligible_peer(peer).then_some((peer_id, latency))
+            })
+            .collect();
+
+        if samples.len() < MIN_SAMPLES {
+            return Ok(());
+        }
+
+        // Sort by latency, then get the median time and the slowest peer
+        samples.sort_by(|a, b| a.1.total_cmp(&b.1));
+
+        let (_, median_latency) = samples[samples.len() / 2];
+        let (slowest_peer_id, slowest_latency) = samples[samples.len() - 1];
+
+        let should_disconnect = always
+            || slowest_latency > SLOW_THRESHOLD_MUL * median_latency
+            || rand::thread_rng().gen_ratio(1, 20);
+
+        if !should_disconnect {
+            return Ok(());
+        }
+
+        info!("Disconnecting slowest non-utreexo peer: {slowest_peer_id}");
+        self.send_to_peer(slowest_peer_id, NodeRequest::Shutdown)
     }
 
     pub(crate) fn maybe_open_connection_with_added_peers(&mut self) -> Result<(), WireError> {
