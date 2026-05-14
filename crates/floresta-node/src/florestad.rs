@@ -377,8 +377,7 @@ impl Florestad {
 
         #[cfg(feature = "compact-filters")]
         let cfilters = if self.config.cfilters {
-            // Block Filters
-            let filter_store = FlatFiltersStore::new((data_dir.clone() + "/cfilters").into());
+            let filter_store = FlatFiltersStore::new(data_dir.clone() + "/cfilters");
             let cfilters = Arc::new(NetworkFilters::new(filter_store));
 
             let height = cfilters
