@@ -176,7 +176,7 @@ impl Consensus {
     ) -> Result<(), BlockchainError> {
         // Blocks must contain at least one transaction (i.e., the coinbase)
         if transactions.is_empty() {
-            return Err(BlockValidationErrors::EmptyBlock)?;
+            Err(BlockValidationErrors::EmptyBlock)?;
         }
 
         // Total block fees that the miner can claim in the coinbase
@@ -185,7 +185,7 @@ impl Consensus {
         for (n, transaction) in transactions.iter().enumerate() {
             if n == 0 {
                 if !transaction.is_coinbase() {
-                    return Err(BlockValidationErrors::FirstTxIsNotCoinbase)?;
+                    Err(BlockValidationErrors::FirstTxIsNotCoinbase)?;
                 }
                 Self::verify_coinbase(transaction)?;
                 // Skip next checks: coinbase input is exempt, coinbase reward checked later
@@ -211,7 +211,7 @@ impl Consensus {
         let coinbase_total = Self::total_out_value(&transactions[0])?;
 
         if coinbase_total > allowed_reward {
-            return Err(BlockValidationErrors::BadCoinbaseOutValue)?;
+            Err(BlockValidationErrors::BadCoinbaseOutValue)?;
         }
 
         Ok(())
@@ -239,7 +239,7 @@ impl Consensus {
 
         // Blocks must contain at least one transaction (i.e., the coinbase)
         if transactions.is_empty() {
-            return Err(BlockValidationErrors::EmptyBlock)?;
+            Err(BlockValidationErrors::EmptyBlock)?;
         }
 
         // The block-wide output index to compare against unspent output hints
@@ -250,7 +250,7 @@ impl Consensus {
         for (n, (transaction, txid)) in transactions.iter().zip(txids).enumerate() {
             if n == 0 {
                 if !transaction.is_coinbase() {
-                    return Err(BlockValidationErrors::FirstTxIsNotCoinbase)?;
+                    Err(BlockValidationErrors::FirstTxIsNotCoinbase)?;
                 }
                 Self::verify_coinbase(transaction)?;
                 let coinbase_total = Self::total_out_value(transaction)?;
@@ -258,7 +258,7 @@ impl Consensus {
                 // We don't know how much money is paid in fees (it would require input amounts),
                 // so we can't check the exact amount here
                 if coinbase_total > Amount::MAX_MONEY {
-                    return Err(BlockValidationErrors::TooManyCoins)?;
+                    Err(BlockValidationErrors::TooManyCoins)?;
                 }
 
                 // Skip BIP-30 unspendable coinbase outputs
@@ -371,7 +371,7 @@ impl Consensus {
 
             // A coinbase output created at height n can only be spent at height >= n + 100
             if utxo.is_coinbase && (height < utxo.creation_height + 100) {
-                return Err(tx_err!(txid, CoinbaseNotMatured))?;
+                Err(tx_err!(txid, CoinbaseNotMatured))?;
             }
 
             // Check script sizes (spent txo pubkey, inputs are covered already)
@@ -384,12 +384,12 @@ impl Consensus {
 
         // Sanity check
         if in_value > Amount::MAX_MONEY {
-            return Err(BlockValidationErrors::TooManyCoins)?;
+            Err(BlockValidationErrors::TooManyCoins)?;
         }
 
         // Value in should be greater or equal to value out. Otherwise, inflation.
         if out_value > in_value {
-            return Err(tx_err!(txid, NotEnoughMoney))?;
+            Err(tx_err!(txid, NotEnoughMoney))?;
         }
 
         // Verify the tx script
@@ -457,16 +457,16 @@ impl Consensus {
         let txid = || transaction.compute_txid();
 
         if transaction.input.is_empty() {
-            return Err(tx_err!(txid, EmptyInputs))?;
+            Err(tx_err!(txid, EmptyInputs))?;
         }
         if transaction.output.is_empty() {
-            return Err(tx_err!(txid, EmptyOutputs))?;
+            Err(tx_err!(txid, EmptyOutputs))?;
         }
 
         for input in &transaction.input {
             // Null PrevOuts are only allowed in coinbase inputs
             if input.previous_output.is_null() {
-                return Err(tx_err!(txid, NullPrevOut))?;
+                Err(tx_err!(txid, NullPrevOut))?;
             }
 
             // Check script sizes (current tx scriptsig and TODO witness if present)
@@ -478,7 +478,7 @@ impl Consensus {
 
         // Sanity check
         if out_value > Amount::MAX_MONEY {
-            return Err(BlockValidationErrors::TooManyCoins)?;
+            Err(BlockValidationErrors::TooManyCoins)?;
         }
 
         Ok(out_value)
@@ -494,21 +494,21 @@ impl Consensus {
     /// - total block weight is within the 4,000,000 WU limit
     pub fn check_block(&self, block: &Block, height: u32) -> Result<Vec<Txid>, BlockchainError> {
         let Some(txids) = Self::check_merkle_root(block) else {
-            return Err(BlockValidationErrors::BadMerkleRoot)?;
+            Err(BlockValidationErrors::BadMerkleRoot)?
         };
 
         let bip34_height = self.parameters.params.bip34_height;
         // If bip34 is active, check that the encoded block height is correct
         if height >= bip34_height && Self::get_bip34_height(block) != Some(height) {
-            return Err(BlockValidationErrors::BadBip34)?;
+            Err(BlockValidationErrors::BadBip34)?;
         }
 
         if !block.check_witness_commitment() {
-            return Err(BlockValidationErrors::BadWitnessCommitment)?;
+            Err(BlockValidationErrors::BadWitnessCommitment)?;
         }
 
         if block.weight() > Weight::MAX_BLOCK {
-            return Err(BlockValidationErrors::BlockTooBig)?;
+            Err(BlockValidationErrors::BlockTooBig)?;
         }
 
         Ok(txids)
@@ -717,7 +717,7 @@ impl Consensus {
 
         // Check if there is a spend of an unspendable UTXO (BIP30)
         if Self::contains_unspendable_utxo(&del_hashes) {
-            return Err(BlockValidationErrors::UnspendableUTXO)?;
+            Err(BlockValidationErrors::UnspendableUTXO)?;
         }
 
         // Convert to BitcoinNodeHash, from rustreexo

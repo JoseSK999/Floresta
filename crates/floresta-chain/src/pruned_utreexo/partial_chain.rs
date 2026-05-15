@@ -178,7 +178,7 @@ impl PartialChainStateInner {
 
         let prev_block = self.get_ancestor(height)?;
         if block.header.prev_blockhash != prev_block.block_hash() {
-            return Err(BlockValidationErrors::BlockExtendsAnOrphanChain)?;
+            Err(BlockValidationErrors::BlockExtendsAnOrphanChain)?;
         }
 
         // Validate block transactions

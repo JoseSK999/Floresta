@@ -228,7 +228,7 @@ impl<PersistedState: ChainStore> ChainState<PersistedState> {
 
         let actual_target = block_header.target();
         if actual_target > expected_target {
-            return Err(BlockValidationErrors::NotEnoughPow)?;
+            Err(BlockValidationErrors::NotEnoughPow)?;
         }
 
         self.check_bip94_block(block_header, height)?;
@@ -1083,7 +1083,7 @@ impl<PersistedState: ChainStore> BlockchainInterface for ChainState<PersistedSta
             .collect();
 
         if !acc.verify(&proof, &del_hashes)? {
-            return Err(BlockValidationErrors::InvalidUtreexoProof)?;
+            Err(BlockValidationErrors::InvalidUtreexoProof)?;
         }
 
         let height = self
@@ -1316,7 +1316,7 @@ impl<PersistedState: ChainStore> UpdatableChainstate for ChainState<PersistedSta
                 // invalid proof. They don't mean the block is invalid, just that we are using the
                 // wrong accumulator, since we are not processing the right block.
                 if height != validation_index {
-                    return Err(BlockValidationErrors::BlockDoesntExtendTip)?;
+                    Err(BlockValidationErrors::BlockDoesntExtendTip)?;
                 }
 
                 // If this block is our validation index, but it's fully valid, this clearly means
@@ -1344,7 +1344,7 @@ impl<PersistedState: ChainStore> UpdatableChainstate for ChainState<PersistedSta
                 // connect a block where our accumulator isn't the right one. So the proof will
                 // always be invalid.
                 if height != validation_index + 1 {
-                    return Err(BlockValidationErrors::BlockDoesntExtendTip)?;
+                    Err(BlockValidationErrors::BlockDoesntExtendTip)?;
                 }
 
                 height
