@@ -265,7 +265,7 @@ impl Consensus {
         height: u32,
         block: &Block,
         txids: Vec<Txid>,
-        unspent_indexes: HashSet<u32>,
+        unspent_indexes: &HashSet<u32>,
         salt: &SipHashKeys,
     ) -> Result<(SwiftSyncAgg, Amount), BlockchainError> {
         let transactions = &block.txdata;
@@ -626,7 +626,7 @@ impl Consensus {
         &self,
         block: &Block,
         height: u32,
-        unspent_indexes: HashSet<u32>,
+        unspent_indexes: &HashSet<u32>,
         salt: &SipHashKeys,
     ) -> Result<SwiftSyncDelta, BlockchainError> {
         let txids = self.check_block(block, height)?;
@@ -636,7 +636,7 @@ impl Consensus {
             &txids,
             height,
             block.block_hash(),
-            &unspent_indexes,
+            unspent_indexes,
         );
         let (agg, amount) =
             Self::verify_block_transactions_swiftsync(height, block, txids, unspent_indexes, salt)?;
@@ -1874,7 +1874,7 @@ mod tests {
             match i {
                 // We add the only TxOut in this block to the aggregator (spent later).
                 9 => {
-                    let unspent_indexes = HashSet::new();
+                    let unspent_indexes = &HashSet::new();
                     let processed = consensus
                         .process_block_swiftsync(block, 9, unspent_indexes, &salt)
                         .unwrap();
@@ -1889,7 +1889,7 @@ mod tests {
                 }
                 // This block spends the TxOut that was added to the aggregator in block 9.
                 170 => {
-                    let unspent_indexes = HashSet::from_iter(vec![0, 1, 2]);
+                    let unspent_indexes = &HashSet::from_iter(vec![0, 1, 2]);
                     let processed = consensus
                         .process_block_swiftsync(block, 170, unspent_indexes, &salt)
                         .unwrap();
@@ -1903,7 +1903,7 @@ mod tests {
                     supply += processed.unspent_amount;
                 }
                 i => {
-                    let unspent_indexes = default_unspent_idx.clone();
+                    let unspent_indexes = &default_unspent_idx;
                     let processed = consensus
                         .process_block_swiftsync(block, i as u32, unspent_indexes, &salt)
                         .unwrap();
@@ -1939,10 +1939,10 @@ mod tests {
         let block_170 = &mainnet_blocks[170];
 
         let processed_9 = consensus
-            .process_block_swiftsync(block_9, 9, HashSet::new(), &salt)
+            .process_block_swiftsync(block_9, 9, &HashSet::new(), &salt)
             .unwrap();
         let processed_170 = consensus
-            .process_block_swiftsync(block_170, 170, HashSet::from_iter(vec![0, 1, 2]), &salt)
+            .process_block_swiftsync(block_170, 170, &HashSet::from_iter(vec![0, 1, 2]), &salt)
             .unwrap();
         let agg_9 = processed_9.aggregator_delta;
         let agg_170 = processed_170.aggregator_delta;
