@@ -258,7 +258,7 @@ where
             return Ok(()); // already being processed
         }
 
-        let Some(block_hints) = hints.take_indices(block_height) else {
+        let Some(block_hints) = hints.indices_at_height(block_height) else {
             error!("We tried processing block {block_height} but its hints are missing");
             return Ok(());
         };
@@ -274,7 +274,7 @@ where
         let node_sender = self.node_tx.clone();
         tokio::task::spawn_blocking(move || {
             let result =
-                consensus.process_block_swiftsync(&block, block_height, unspent_indexes, &salt);
+                consensus.process_block_swiftsync(&block, block_height, &unspent_indexes, &salt);
 
             let _ = node_sender.send(NodeNotification::FromWorker {
                 result,
@@ -582,7 +582,7 @@ where
         result: WorkerResult,
         block_hash: BlockHash,
         height: u32,
-        _hints: &mut Hintsfile,
+        hints: &mut Hintsfile,
     ) -> Result<(), WireError> {
         // Ignore remaining worker results after SwiftSync has aborted.
         if self.was_aborted() {
@@ -610,6 +610,8 @@ where
                     .unwrap_or(Amount::MAX);
                 self.pump_utreexo_adds(height, utreexo_adds);
 
+                // Block is valid and not mutated, we can drop these hints from memory
+                hints.take_indices(height);
                 self.handle_valid_worker_block(block_hash, height, block);
 
                 // Refill request capacity freed by processing this block
@@ -677,7 +679,11 @@ where
 
             // This block's txdata doesn't match the txid or wtxid merkle root. This can be a
             // mutated block, so we can't invalidate it since the original txdata may be valid.
-            BlockValidationErrors::BadMerkleRoot | BlockValidationErrors::BadWitnessCommitment => {}
+            BlockValidationErrors::BadMerkleRoot | BlockValidationErrors::BadWitnessCommitment => {
+                // Re-insert the block request so that we can retry it after banning this peer
+                self.inflight
+                    .insert(InflightRequests::Blocks(block_hash), (peer, Instant::now()));
+            }
 
             // No proofs involved in SwiftSync (we use implicit deletion instead)
             BlockValidationErrors::InvalidUtreexoProof => {}
