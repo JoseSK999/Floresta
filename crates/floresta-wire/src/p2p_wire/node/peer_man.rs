@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
+use std::time::Duration;
 use std::time::Instant;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
@@ -661,10 +662,25 @@ where
         peer: u32,
         addresses: Vec<AddrV2Message>,
     ) -> Result<(), WireError> {
-        self.inflight.remove(&InflightRequests::GetAddresses);
+        /// Don't allow addresses whose timestamp are more than 10 minutes into the future, or an
+        /// attacker could make us drop all addresses from our address manager with their own.
+        const ADDRESS_TIME_CUTOFF: Duration = Duration::from_secs(600); // 10 minutes
+
         debug!("Got {} addresses from peer {}", addresses.len(), peer);
-        let addresses: Vec<_> = addresses.into_iter().map(|addr| addr.into()).collect();
-        self.address_man.push_addresses(&addresses);
+        self.inflight.remove(&InflightRequests::GetAddresses);
+
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("System clock isn't working");
+
+        let cutoff = now + ADDRESS_TIME_CUTOFF;
+        let good_addresses: Vec<_> = addresses
+            .into_iter()
+            .filter(|addr| u64::from(addr.time) < cutoff.as_secs())
+            .map(|addr| addr.into())
+            .collect();
+
+        self.address_man.push_addresses(&good_addresses);
 
         // For feeler peers, we ask for addresses to populate our address manager,
         // then disconnect them
