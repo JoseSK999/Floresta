@@ -328,6 +328,11 @@ mod tests {
     use crate::UtxoData;
     use crate::pruned_utreexo::IBDState;
 
+    const SAMPLE_WORK_BYTES: [u8; 32] = [
+        0, 0, 0, 3, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0,
+        0, 4,
+    ];
+
     #[derive(Debug)]
     pub enum MockBlockchainError {
         NotFound,
@@ -930,11 +935,7 @@ mod tests {
 
     #[test]
     fn test_multiply_work_by_u32_success() {
-        let work_bytes: [u8; 32] = [
-            0, 0, 0, 3, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0,
-            0, 0, 4,
-        ];
-        let work = Work::from_be_bytes(work_bytes);
+        let work = Work::from_be_bytes(SAMPLE_WORK_BYTES);
         let factor = 2;
 
         let result = work.multiply_work_by_u32(factor).unwrap();
@@ -964,6 +965,23 @@ mod tests {
     }
 
     #[test]
+    fn test_multiply_work_by_u32_factor_zero() {
+        let work = Work::from_be_bytes([0xffu8; 32]);
+        let result = work.multiply_work_by_u32(0).unwrap();
+
+        assert_eq!(result, Work::from_be_bytes([0u8; 32]));
+    }
+
+    #[test]
+    fn test_multiply_work_by_u32_factor_one() {
+        let work = Work::from_be_bytes(SAMPLE_WORK_BYTES);
+
+        let result = work.multiply_work_by_u32(1).unwrap();
+
+        assert_eq!(result, work);
+    }
+
+    #[test]
     fn test_calculate_chain_work() {
         let (mock_chain, headers) = get_chain_and_headers(3000);
         let header = headers[headers.len() - 1];
@@ -978,5 +996,15 @@ mod tests {
 
         assert_eq!(work.to_string_hex(), expected_hex_string);
         assert_eq!(work, expected_work);
+    }
+
+    #[test]
+    fn test_work_to_string_hex() {
+        let work = Work::from_be_bytes(SAMPLE_WORK_BYTES);
+
+        assert_eq!(
+            work.to_string_hex(),
+            "0000000300000001000000000000000200000000000000030000000000000004"
+        );
     }
 }
