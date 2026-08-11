@@ -521,6 +521,70 @@ mod tests {
         (mock_chain, headers)
     }
 
+    /// Real mainnet headers of the two BIP-30 duplicated blocks.
+    const BLOCK_91722_HEADER_HEX: &str = "0100000042ba7629c32525ff7c74ca323fdc4c6d5b5c4410901aeb4f04300a000000000068b45f58b674e94eb881cd67b04c2cba07fe5552dbf1d5385637b0d4073dbfe3c89fdf4c56720e1ba67373ee";
+
+    const BLOCK_91812_HEADER_HEX: &str = "010000000f362bdc16f2f880097c71fd3296c01b835c8b034e4d2939e8af02000000000065a62f2f6b9102d6eb5eee95be5ec3fcdfa27cf2117deeebefc6be53761d99499423e04c56720e1bb4518a45";
+
+    fn bip30_block(header_hex: &str) -> Block {
+        let header: Header = deserialize_hex(header_hex).expect("Failed to deserialize header");
+        Block {
+            header,
+            txdata: vec![],
+        }
+    }
+
+    #[test]
+    fn test_bip30_height_91722_true() {
+        let block = bip30_block(BLOCK_91722_HEADER_HEX);
+        assert!(block.is_bip30_unspendable(91722));
+    }
+
+    #[test]
+    fn test_bip30_height_91812_true() {
+        let block = bip30_block(BLOCK_91812_HEADER_HEX);
+        assert!(block.is_bip30_unspendable(91812));
+    }
+
+    #[test]
+    fn test_bip30_wrong_height_returns_false() {
+        let block_91722 = bip30_block(BLOCK_91722_HEADER_HEX);
+        let block_91812 = bip30_block(BLOCK_91812_HEADER_HEX);
+
+        // Each hash is only "unspendable" at its own height
+        assert!(!block_91722.is_bip30_unspendable(91812));
+        assert!(!block_91812.is_bip30_unspendable(91722));
+    }
+
+    #[test]
+    fn test_bip30_other_heights_return_false() {
+        let block_91722 = bip30_block(BLOCK_91722_HEADER_HEX);
+        let block_91812 = bip30_block(BLOCK_91812_HEADER_HEX);
+
+        for height in [0, 1, 91721, 91723, 91811, 91813] {
+            assert!(
+                !block_91722.is_bip30_unspendable(height),
+                "91722 hash should not be unspendable at height {height}"
+            );
+            assert!(
+                !block_91812.is_bip30_unspendable(height),
+                "91812 hash should not be unspendable at height {height}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_bip30_unrelated_block_returns_false() {
+        let block = Block {
+            header: get_genesis_header(),
+            txdata: vec![],
+        };
+
+        for height in [0, 91722, 91812] {
+            assert!(!block.is_bip30_unspendable(height));
+        }
+    }
+
     #[test]
     fn test_calculate_median_time_past_more_than_11_blocks() {
         let (mock_chain, headers) = get_chain_and_headers(21);
