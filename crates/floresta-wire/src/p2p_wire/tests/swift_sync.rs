@@ -11,6 +11,7 @@ mod tests {
     use bitcoin::blockdata::constants::genesis_block;
     use bitcoin::consensus::encode::deserialize_hex;
     use floresta_chain::pruned_utreexo::BlockchainInterface;
+    use floresta_chain::pruned_utreexo::IBDState;
     use floresta_chain::pruned_utreexo::UpdatableChainstate;
     use floresta_common::bhash;
     use hintsfile::EliasFano;
@@ -67,7 +68,13 @@ mod tests {
 
         assert_eq!(best_block.1, headers[NUM_BLOCKS].block_hash());
         assert_eq!(best_block, expected);
-        assert!(!chain.is_in_ibd());
+        assert_eq!(
+            chain.ibd_state(),
+            IBDState::SwiftSync {
+                processed_blocks: NUM_BLOCKS as u32,
+                total_blocks: NUM_BLOCKS as u32,
+            }
+        );
     }
 
     #[tokio::test]
@@ -106,8 +113,13 @@ mod tests {
 
         assert_eq!(best_block.1, headers[NUM_BLOCKS].block_hash());
         assert_eq!(best_block, expected);
-
-        assert!(!chain.is_in_ibd());
+        assert_eq!(
+            chain.ibd_state(),
+            IBDState::SwiftSync {
+                processed_blocks: NUM_BLOCKS as u32,
+                total_blocks: NUM_BLOCKS as u32,
+            }
+        );
     }
 
     /// Unusable hints must skip SwiftSync, leaving the node ready for proof sync.
@@ -134,6 +146,10 @@ mod tests {
             assert!(!node.was_aborted());
             assert_eq!(node.chain.get_validation_index().unwrap(), 0);
             assert_eq!(node.witness_mode, WitnessMode::Full);
+            assert!(!matches!(
+                node.chain.ibd_state(),
+                IBDState::SwiftSync { .. }
+            ));
         }
     }
 
@@ -175,6 +191,10 @@ mod tests {
         assert_eq!(node.chain.get_acc().leaves, acc.leaves);
         assert_eq!(node.last_block_request, 2);
         assert_eq!(node.witness_mode, WitnessMode::Full);
+        assert!(!matches!(
+            node.chain.ibd_state(),
+            IBDState::SwiftSync { .. }
+        ));
     }
 
     /// A header-committed invalid block must abort SwiftSync, unlike a mutated block.
