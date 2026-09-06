@@ -175,6 +175,18 @@ where
         // so even if the remote peer disconnects, we can still re-request them.
     }
 
+    fn check_connections(&mut self) -> Result<(), WireError> {
+        if self.has_fixed_peers() {
+            return self.maybe_open_connection(ServiceFlags::NETWORK);
+        }
+
+        if self.connected_peers() >= SwiftSync::MAX_OUTGOING_PEERS {
+            self.maybe_disconnect_slowest_peer(&[], false)?;
+        }
+
+        self.maybe_open_connection(ServiceFlags::NETWORK)
+    }
+
     /// Starts SwiftSync processing for up to `MAX_PARALLEL_WORKERS` pending blocks.
     fn pump_swiftsync(&mut self, hints: &mut Hintsfile) -> Result<(), WireError> {
         let processing = self
@@ -368,7 +380,7 @@ where
 
         // Checks if we need to open a new connection
         periodic_job!(
-            self.last_connection => self.maybe_open_connection(ServiceFlags::NETWORK),
+            self.last_connection => self.check_connections(),
             SwiftSync::TRY_NEW_CONNECTION,
         );
 
@@ -579,6 +591,9 @@ where
                     processed_blocks: self.context.processed_blocks,
                     total_blocks: self.context.stop_height,
                 });
+
+                // Refill freed slots without waiting for another block or the maintenance tick
+                self.get_blocks_to_download();
             }
             Err(e) => {
                 let header = block.block.header;
