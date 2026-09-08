@@ -6,6 +6,8 @@ Verifies that the node correctly handles address messages (addr and addrv2),
 enforces message size limits, and responds to getaddr requests appropriately.
 """
 
+import time
+
 import pytest
 
 from test_framework.messages import msg_addrv2, msg_sendaddrv2, msg_getaddr
@@ -13,6 +15,7 @@ from test_framework.p2p import (
     P2PInterface,
 )
 from test_framework.util import wait_until
+from test_framework.messages import CAddress
 
 
 class AddrReceiver(P2PInterface):
@@ -77,6 +80,21 @@ class TestP2pAddrRelay:
 
         self.p2p_conn.send_without_ping(msg_sendaddrv2())
         self.check_disconnection(self.p2p_conn)
+
+        future_address = CAddress()
+        future_address.net = future_address.NET_TORV3
+        future_address.port = 8080
+        future_address.nServices = 1033
+        future_address.ip = (
+            "nix2iapg23s2g6tog6vmmr2xgywfly5522c27hnp7qwm5qyk73mufvyd.onion"
+        )
+        future_address.time = int(time.time()) + 60 * 60 * 24
+
+        self.default_msg.addrs.append(future_address)
+
+        self.log.info(
+            "Testing that addrv2 addresses more than ten minutes in the future are ignored"
+        )
 
         self.log.info("Testing addrv2 message ")
         self.connect_p2p()
