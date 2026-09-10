@@ -23,6 +23,7 @@ from test_framework.constants import (
     JSONRPC_ERRMSG_METHOD_NOT_FOUND,
     JSONRPC_ERRMSG_MISSING_PARAMS,
     JSONRPC_ERRMSG_WRONG_PARAM_TYPE,
+    OPTIONAL_PARAM_METHODS,
     METHODS_REQUIRING_PARAMS,
     NO_PARAM_METHODS,
 )
@@ -33,6 +34,18 @@ class TestRpcServerRequestParsing:
     Test JSON-RPC request parsing, parameter extraction (positional and named),
     error codes, and edge cases on the florestad RPC server.
     """
+
+    def test_optionalparammethods_omittedparams_succeeds(self, shared_florestad_node):
+        """Verify methods with only optional params succeed when params is omitted."""
+        for method in OPTIONAL_PARAM_METHODS:
+            shared_florestad_node.rpc.ensure_rpc_call_success(method=method)
+
+    def test_optionalparammethods_nullparams_succeeds(self, shared_florestad_node):
+        """Verify methods with only optional params succeed when params is explicitly null."""
+        for method in OPTIONAL_PARAM_METHODS:
+            shared_florestad_node.rpc.ensure_rpc_raw_request_call_success(
+                {"jsonrpc": "2.0", "id": "test", "method": method, "params": None}
+            )
 
     def test_noparammethods_omittedparams_succeeds(self, shared_florestad_node):
         """Verify all no-param methods succeed when the params field is omitted."""

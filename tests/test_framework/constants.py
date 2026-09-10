@@ -71,3 +71,9 @@ METHODS_REQUIRING_PARAMS = [
     "loaddescriptor",
     "sendrawtransaction",
 ]
+
+# Methods that accept only optional parameters (all have defaults/None)
+OPTIONAL_PARAM_METHODS = [
+    "getmemoryinfo",
+    "getdeploymentinfo",
+]
