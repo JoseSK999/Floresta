@@ -35,10 +35,13 @@ def test_get_blockchain_info(node_manager, florestad_bitcoind_utreexod_with_chai
     floresta_info = florestad.rpc.get_blockchain_info()
     bitcoind_info = bitcoind.rpc.get_blockchain_info()
 
+    # `verificationprogress` is time-based here and tx-weighted in bitcoind, so
+    # it drifts past the default 1e-8.
     compare_fields(
         floresta_info,
         bitcoind_info,
         ignore_fields=FLORESTA_SPECIFIC_FIELDS,
+        float_tol=1e-3,
     )
 
     # size_on_disk: well-formed, grows after mining.
