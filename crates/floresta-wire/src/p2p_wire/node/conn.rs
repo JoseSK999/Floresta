@@ -2,6 +2,7 @@
 
 use core::net::SocketAddr;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 use std::time::Instant;
 use std::time::SystemTime;
@@ -178,6 +179,8 @@ where
         allow_v1_fallback: bool,
     ) -> Result<(), WireError> {
         let (requests_tx, requests_rx) = unbounded_channel();
+        let peer_id = self.peer_id_count;
+        let socket_read_bytes = self.socket_reads.register(peer_id);
         if let Some(ref proxy) = self.socks5 {
             spawn(timeout(
                 Duration::from_secs(10),
@@ -196,6 +199,7 @@ where
                         .expect("infallible in ChainState")
                         .0,
                     allow_v1_fallback,
+                    socket_read_bytes,
                 ),
             ));
         } else {
@@ -215,6 +219,7 @@ where
                         .expect("infallible in ChainState")
                         .0,
                     allow_v1_fallback,
+                    socket_read_bytes,
                 ),
             ));
         }
@@ -277,6 +282,7 @@ where
         our_user_agent: String,
         our_best_block: u32,
         allow_v1_fallback: bool,
+        socket_read_bytes: Arc<AtomicU64>,
     ) -> Result<(), WireError> {
         let ip_addr = peer_address
             .get_net_address()
@@ -284,7 +290,7 @@ where
         let address = (ip_addr, peer_address.get_port());
 
         let (transport_reader, transport_writer, transport_protocol) =
-            transport::connect(address, network, allow_v1_fallback).await?;
+            transport::connect(address, network, allow_v1_fallback, socket_read_bytes).await?;
 
         let (cancellation_sender, cancellation_receiver) = oneshot::channel();
         let (actor_receiver, actor) = create_actors(transport_reader);
@@ -328,10 +334,16 @@ where
         our_user_agent: String,
         our_best_block: u32,
         allow_v1_fallback: bool,
+        socket_read_bytes: Arc<AtomicU64>,
     ) -> Result<(), WireError> {
-        let (transport_reader, transport_writer, transport_protocol) =
-            transport::connect_proxy(proxy, peer_address.clone(), network, allow_v1_fallback)
-                .await?;
+        let (transport_reader, transport_writer, transport_protocol) = transport::connect_proxy(
+            proxy,
+            peer_address.clone(),
+            network,
+            allow_v1_fallback,
+            socket_read_bytes,
+        )
+        .await?;
 
         let (cancellation_sender, cancellation_receiver) = oneshot::channel();
         let (actor_receiver, actor) = create_actors(transport_reader);

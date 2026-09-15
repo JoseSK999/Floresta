@@ -90,7 +90,7 @@ where
     /// Returns `true` only if we can request `BLOCKS_PER_GETDATA` without exceeding the maximum
     /// unprocessed blocks allowed.
     pub(crate) fn can_request_more_blocks(&self) -> bool {
-        let max_inflight_blocks = T::BLOCKS_PER_GETDATA * T::MAX_CONCURRENT_GETDATA;
+        let max_inflight_blocks = self.context.block_download_window();
 
         // If we do a GETDATA request, this will be the new unprocessed count
         let next_unprocessed = self.unprocessed_blocks() + T::BLOCKS_PER_GETDATA;

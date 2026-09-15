@@ -36,6 +36,9 @@ pub trait NodeContext {
     /// How long we wait for a peer to respond to our request
     const REQUEST_TIMEOUT: u64;
 
+    /// Whether an overdue block request increases its peer's banscore.
+    const PENALIZE_BLOCK_TIMEOUT: bool = true;
+
     /// Max number of simultaneous connections we initiates we are willing to hold
     const MAX_OUTGOING_PEERS: usize = 10;
 
@@ -87,6 +90,11 @@ pub trait NodeContext {
 
     /// How many connections we try at once
     const NEW_CONNECTIONS_BATCH_SIZE: usize = 4;
+
+    /// Maximum number of requested or downloaded blocks awaiting processing.
+    fn block_download_window(&self) -> usize {
+        Self::BLOCKS_PER_GETDATA * Self::MAX_CONCURRENT_GETDATA
+    }
 
     fn get_required_services(&self) -> ServiceFlags {
         ServiceFlags::NETWORK

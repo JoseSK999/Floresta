@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 use std::time::Duration;
+use std::collections::HashMap;
 use std::time::Instant;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
@@ -13,12 +14,9 @@ use floresta_chain::ChainBackend;
 use floresta_common::service_flags;
 use floresta_common::service_flags_strings;
 use floresta_common::try_and_log;
-use rand::distr::Distribution;
-use rand::distr::weighted::WeightedIndex;
 use rand::prelude::IteratorRandom;
 use rand::seq::IndexedRandom;
 use tracing::debug;
-use tracing::error;
 use tracing::info;
 use tracing::warn;
 
@@ -60,43 +58,68 @@ where
 {
     // === SENDING TO PEERS ===
 
-    /// Picks a `Ready` peer supporting `service`, biased toward lower message latency.
-    ///
-    /// Each candidate weight is computed as `lowest_time / time_i`. For instance, if we have two
-    /// candidates with latencies of 50ms and 100ms, weights are 1.0 and 0.5 respectively, and the
-    /// probability of being chosen is 2/3 and 1/3.
-    fn choose_peer_by_latency(&self, service: ServiceFlags) -> Option<(&PeerId, &LocalPeerView)> {
-        // Epsilon is a small positive floor for `f64`. If by any chance a peer has extremely low
-        // message latency, we clamp it to `EPS` so `lowest_time / time_i` stays finite and stable.
-        const EPS: f64 = 1e-9;
-
-        let candidates: Vec<(&PeerId, &LocalPeerView, f64)> = self
-            .peers
+    /// Peers ready for ordinary requests; feelers and temporary connections have dedicated work.
+    fn ready_peers(&self, service: ServiceFlags) -> impl Iterator<Item = (PeerId, &LocalPeerView)> {
+        self.peers
             .iter()
-            .filter(|(_, peer)| peer.services.has(service) && peer.state == PeerStatus::Ready)
-            .filter_map(|(id, peer)| {
-                // Get the average message latency from each peer
-                let Some(t) = peer.message_times.value() else {
-                    error!("Peer {peer:?} has no message times");
-                    return None;
-                };
-                Some((id, peer, t.max(EPS)))
+            .filter(move |(_, peer)| {
+                peer.state == PeerStatus::Ready
+                    && peer.is_long_lived()
+                    && peer.services.has(service)
             })
-            .collect();
+            .map(|(&id, peer)| (id, peer))
+    }
 
-        // Fastest observed time among candidates. Returns `None` if no candidate is found.
-        let lowest_time = candidates.iter().map(|(_, _, t)| *t).reduce(f64::min)?;
+    /// Returns the median response time among eligible peers, in milliseconds.
+    pub(crate) fn median_peer_latency(&self, service: ServiceFlags) -> Option<f64> {
+        let mut times = self
+            .ready_peers(service)
+            .filter_map(|(_, peer)| peer.message_times.value())
+            .collect::<Vec<_>>();
+        times.sort_by(f64::total_cmp);
+        times.get(times.len() / 2).copied()
+    }
 
-        let weights: Vec<f64> = candidates
-            .iter()
-            .map(|(_, _, time)| lowest_time / time)
-            .collect();
+    /// Picks a ready peer, weighted by inverse general response latency.
+    ///
+    /// A peer with half the latency is twice as likely to receive the next request.
+    fn choose_peer_by_latency(&self, service: ServiceFlags) -> Option<PeerId> {
+        let initial_time = self.median_peer_latency(service).unwrap_or(1_000.0);
+        let candidates: Vec<_> = self.ready_peers(service).collect();
+        let (id, _) = candidates
+            .choose_weighted(&mut rand::rng(), |(_, peer)| {
+                // Keep the weight finite even if the measured duration is zero.
+                1.0 / peer.message_times.value().unwrap_or(initial_time).max(1e-9)
+            })
+            .ok()?;
+        Some(*id)
+    }
 
-        let dist = WeightedIndex::new(&weights).ok()?;
-        let idx = dist.sample(&mut rand::rng());
+    /// Picks the least-loaded block provider, breaking ties by general response latency.
+    fn choose_block_peer(&self, service: ServiceFlags) -> Option<PeerId> {
+        // Count current assignments once; replies, retries and disconnects already update this map.
+        let mut pending: HashMap<PeerId, usize> = HashMap::new();
+        for (request, (peer, _)) in &self.inflight {
+            if matches!(request, InflightRequests::Blocks(_)) {
+                *pending.entry(*peer).or_default() += 1;
+            }
+        }
 
-        let (id, peer, _) = candidates[idx];
-        Some((id, peer))
+        let initial_time = self.median_peer_latency(service).unwrap_or(1_000.0);
+        self.ready_peers(service)
+            .map(|(id, peer)| {
+                (
+                    id,
+                    pending.get(&id).copied().unwrap_or(0),
+                    peer.message_times.value().unwrap_or(initial_time),
+                )
+            })
+            .min_by(|(_, pending_a, latency_a), (_, pending_b, latency_b)| {
+                pending_a
+                    .cmp(pending_b)
+                    .then_with(|| latency_a.total_cmp(latency_b))
+            })
+            .map(|(id, _, _)| id)
     }
 
     /// Whether the node was configured with a fixed peer list (via `--connect`).
@@ -118,8 +141,9 @@ where
             .count()
     }
 
-    /// Sends a request to an initialized peer that supports `required_service`, chosen via a
-    /// latency-weighted distribution (lower latency => more likely).
+    /// Balances block requests by outstanding blocks; other requests use latency weighting.
+    ///
+    /// Faster block providers clear their outstanding work sooner and earn more refills.
     ///
     /// Returns an error if no ready peer has `required_service` or if sending the request failed.
     pub(crate) fn send_to_fast_peer(
@@ -127,49 +151,30 @@ where
         request: NodeRequest,
         required_service: ServiceFlags,
     ) -> Result<PeerId, WireError> {
-        let (peer_id, peer) = self
-            .choose_peer_by_latency(required_service)
-            .ok_or(WireError::NoPeersAvailable)?;
+        let peer_id = match request {
+            NodeRequest::GetBlock(..) => self.choose_block_peer(required_service),
+            _ => self.choose_peer_by_latency(required_service),
+        }
+        .ok_or(WireError::NoPeersAvailable)?;
 
-        peer.channel.send(request)?;
+        self.peers[&peer_id].channel.send(request)?;
 
-        Ok(*peer_id)
+        Ok(peer_id)
     }
 
-    #[inline]
+    /// Sends to a uniformly chosen ready, long-lived peer supporting `required_service`.
     pub(crate) fn send_to_random_peer(
-        &mut self,
+        &self,
         req: NodeRequest,
         required_service: ServiceFlags,
-    ) -> Result<u32, WireError> {
-        if self.peers.is_empty() {
-            return Err(WireError::NoPeersAvailable);
-        }
-
-        let peers = match required_service {
-            ServiceFlags::NONE => &self.peer_ids,
-            _ => self
-                .peer_by_service
-                .get(&required_service)
-                .ok_or(WireError::NoPeersAvailable)?,
-        };
-
-        if peers.is_empty() {
-            return Err(WireError::NoPeersAvailable);
-        }
-
-        let peer = peers
+    ) -> Result<PeerId, WireError> {
+        let (peer_id, peer) = self
+            .ready_peers(required_service)
             .choose(&mut rand::rng())
-            .expect("infallible: we checked that peers isn't empty");
+            .ok_or(WireError::NoPeersAvailable)?;
 
-        self.peers
-            .get(peer)
-            .ok_or(WireError::NoPeersAvailable)?
-            .channel
-            .send(req)
-            .map_err(WireError::ChannelSend)?;
-
-        Ok(*peer)
+        peer.channel.send(req)?;
+        Ok(peer_id)
     }
 
     pub(crate) fn send_to_peer(&self, peer_id: u32, req: NodeRequest) -> Result<(), WireError> {
@@ -597,9 +602,9 @@ where
 
     /// Checks whether some of our inflight requests have timed out.
     ///
-    /// This function will check if any of our inflight requests have timed out, and if so,
-    /// it will remove them from the inflight list and increase the banscore of the peer that
-    /// sent the request. It will also resend the request to another peer.
+    /// This function will check if any of our inflight requests have timed out,
+    /// and if so it will remove them from the inflight list, apply the timeout
+    /// penalty, and resend the request to a peer.
     pub(crate) fn check_for_timeout(&mut self) -> Result<(), WireError> {
         let now = Instant::now();
 
@@ -621,10 +626,24 @@ where
             .filter_map(|(req, (_, time))| timed_out_fn(req, time))
             .collect::<Vec<_>>();
 
+        let mut retry_error = None;
+        let mut block_timeouts_by_peer: HashMap<PeerId, usize> = HashMap::new();
+        let mut other_timeouts = 0;
+        let mut retry_failures = 0;
+        let mut oldest_timeout_secs = 0;
         for req in timed_out {
             let Some((peer, time)) = self.inflight.remove(&req) else {
                 continue;
             };
+
+            if matches!(req, InflightRequests::Blocks(_)) {
+                *block_timeouts_by_peer.entry(peer).or_default() += 1;
+            } else {
+                other_timeouts += 1;
+            }
+            // Include all expired request kinds in the oldest age and retry-failure totals.
+            oldest_timeout_secs =
+                oldest_timeout_secs.max(now.saturating_duration_since(time).as_secs());
 
             // If a feeler connection times out, we ban them at the first message
             if let Some(peer_data) = self.peers.get(&peer) {
@@ -644,17 +663,49 @@ where
             }
 
             debug!("Request timed out: {req:?}");
-            // Increase the banscore and try banning the peer if needed, then re-request
-            try_and_log!(self.increase_banscore(peer, 1));
+            if matches!(
+                req,
+                InflightRequests::Blocks(_)
+                    | InflightRequests::Headers
+                    | InflightRequests::GetFilters
+                    | InflightRequests::UtreexoState(_)
+            ) && let Some(peer) = self.peers.get_mut(&peer)
+            {
+                // Silence is at least this slow; score it now even if no response ever arrives.
+                peer.message_times.add(T::REQUEST_TIMEOUT as f64 * 1_000.0);
+            }
+            // Adaptive download probing may delay honest block responses.
+            if T::PENALIZE_BLOCK_TIMEOUT || !matches!(req, InflightRequests::Blocks(_)) {
+                try_and_log!(self.increase_banscore(peer, 1));
+            }
 
             if let Err(e) = self.redo_inflight_request(&req) {
-                // CRITICAL: never drop the request, so we retry it later
+                retry_failures += 1;
+                // CRITICAL: never drop the request, so we retry it later.
+                //
+                // Note that this failed `redo_inflight_request` will make us punish the
+                // unresponsive peer again on each tick while retries keep failing. We
+                // could keep track of requests that timed-out and failed to be retried,
+                // to punish them once, but this is uncommon and punishments are small.
                 self.inflight.insert(req, (peer, time));
-                return Err(e);
+                // One failed dispatch must not hide the remaining peers' timeouts.
+                retry_error = Some(e);
             }
         }
 
-        Ok(())
+        // Retries replace request timestamps, so report the expired assignments before losing them.
+        if !block_timeouts_by_peer.is_empty() {
+            let block_timeouts = block_timeouts_by_peer.values().sum::<usize>();
+            let mut block_timeouts_by_peer = block_timeouts_by_peer.into_iter().collect::<Vec<_>>();
+            block_timeouts_by_peer.sort_unstable();
+            info!(
+                "Block request timeouts: blocks={block_timeouts} other_requests={other_timeouts} \
+                 retry_failures={retry_failures} oldest_age_secs={oldest_timeout_secs} \
+                 block_timeouts_by_peer={block_timeouts_by_peer:?}"
+            );
+        }
+
+        retry_error.map_or(Ok(()), Err)
     }
 
     pub(crate) fn handle_addresses_from_peer(
@@ -794,52 +845,34 @@ where
 
     // === METRICS AND HELPERS ===
 
-    /// Register a message on `self.inflights` and record the time taken to respond to it.
+    /// Records general response latency, only for the current requester.
     ///
-    /// We need this information for two purposes:
-    /// 1. To calculate the average time taken to respond to messages from peers, which we use
-    ///    to select the fastest peer when sending requests.
-    /// 2. If `metrics` feature is enabled, we record the time taken for all peers on a histogram,
-    ///    and expose it as a prometheus metric.
+    /// Batched blocks and filters use each reply's elapsed time from the shared request timestamp.
     pub(crate) fn register_message_time(
         &mut self,
         notification: &PeerMessages,
         peer: PeerId,
         read_at: Instant,
     ) -> Option<()> {
-        let sent_at = match notification {
-            PeerMessages::Block(block) => {
-                let inflight = self
-                    .inflight
-                    .get(&InflightRequests::Blocks(block.block_hash()))?;
-
-                inflight.1
-            }
-
-            PeerMessages::Ready(_) => {
-                let inflight = self.inflight.get(&InflightRequests::Connect(peer))?;
-                inflight.1
-            }
-
-            PeerMessages::Headers(_) => {
-                let inflight = self.inflight.get(&InflightRequests::Headers)?;
-                inflight.1
-            }
-
-            PeerMessages::BlockFilter((_, _)) => {
-                let inflight = self.inflight.get(&InflightRequests::GetFilters)?;
-                inflight.1
-            }
-
-            PeerMessages::UtreexoState(_) => {
-                let inflight = self.inflight.get(&InflightRequests::UtreexoState(peer))?;
-                inflight.1
-            }
-
+        let request = match notification {
+            PeerMessages::Block(block) => InflightRequests::Blocks(block.block_hash()),
+            PeerMessages::Ready(_) => InflightRequests::Connect(peer),
+            PeerMessages::Headers(_) => InflightRequests::Headers,
+            PeerMessages::BlockFilter(_) => InflightRequests::GetFilters,
+            PeerMessages::UtreexoState(_) => InflightRequests::UtreexoState(peer),
             _ => return None,
         };
+        let (request_peer, sent_at) = self.inflight.get(&request)?;
 
-        let elapsed = read_at.duration_since(sent_at).as_secs_f64();
+        // A late reply must not use another peer's retry timestamp.
+        if *request_peer != peer {
+            return None;
+        }
+
+        // A reply may be read just before a retry, so `sent_at` will be
+        // overridden with the retry instant, which makes `read_at < sent_at`.
+        // Skip that stale sample instead of recording zero latency.
+        let elapsed = read_at.checked_duration_since(*sent_at)?.as_secs_f64();
         if let Some(peer) = self.peers.get_mut(&peer) {
             peer.message_times.add(elapsed * 1_000.0); // milliseconds
         }

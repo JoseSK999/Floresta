@@ -4,7 +4,14 @@ use core::fmt;
 use core::fmt::Debug;
 use core::fmt::Display;
 use core::fmt::Formatter;
+use std::collections::BTreeMap;
 use std::io;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
+use std::task::Context;
+use std::task::Poll;
 
 use bip324::Role;
 use bip324::futures::Protocol;
@@ -36,6 +43,7 @@ use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWrite;
 use tokio::io::AsyncWriteExt;
 use tokio::io::BufReader;
+use tokio::io::ReadBuf;
 use tokio::io::ReadHalf;
 use tokio::io::WriteHalf;
 use tokio::net::TcpStream;
@@ -50,10 +58,78 @@ use super::socks::Socks5Error;
 use super::socks::Socks5StreamBuilder;
 use crate::address_man::LocalAddress;
 
-type TcpReadTransport = ReadTransport<BufReader<ReadHalf<TcpStream>>>;
+type TcpReadTransport = ReadTransport<BufReader<CountedReader<ReadHalf<TcpStream>>>>;
 type TcpWriteTransport = WriteTransport<WriteHalf<TcpStream>>;
 type TransportResult =
     Result<(TcpReadTransport, TcpWriteTransport, TransportProtocol), TransportError>;
+
+/// Socket-read counters shared across node contexts; never used for download decisions.
+#[derive(Default)]
+pub(crate) struct SocketReadMetrics {
+    peers: BTreeMap<u32, Arc<AtomicU64>>,
+    /// Retain departed peers until the next diagnostic sample while SwiftSync is observing.
+    observing: bool,
+}
+
+impl SocketReadMetrics {
+    /// Registers a connection, reaping old counters when no diagnostic consumer is running.
+    pub(crate) fn register(&mut self, peer: u32) -> Arc<AtomicU64> {
+        if !self.observing {
+            self.peers.retain(|_, bytes| Arc::strong_count(bytes) > 1);
+        }
+        let bytes = Arc::new(AtomicU64::new(0));
+        self.peers.insert(peer, bytes.clone());
+        bytes
+    }
+
+    /// Starts or stops interval sampling, discarding traffic from the previous node phase.
+    pub(crate) fn set_observing(&mut self, observing: bool) {
+        self.take();
+        self.observing = observing;
+    }
+
+    /// Takes this interval's bytes, including final reads from peers that have disconnected.
+    pub(crate) fn take(&mut self) -> BTreeMap<u32, u64> {
+        let mut sample = BTreeMap::new();
+        self.peers.retain(|peer, bytes| {
+            // Check lifetime first: a reader dropping after the swap may still add final bytes.
+            let active = Arc::strong_count(bytes) > 1;
+            sample.insert(*peer, bytes.swap(0, Ordering::Relaxed));
+            active
+        });
+        sample
+    }
+}
+
+/// Counts bytes below buffering, framing and decryption, including incomplete messages.
+/// This is application socket-read traffic, not NIC traffic or block-only payload bytes.
+pub(crate) struct CountedReader<R> {
+    inner: R,
+    bytes: Arc<AtomicU64>,
+}
+
+impl<R> CountedReader<R> {
+    fn new(inner: R, bytes: Arc<AtomicU64>) -> Self {
+        Self { inner, bytes }
+    }
+}
+
+impl<R: AsyncRead + Unpin> AsyncRead for CountedReader<R> {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        let before = buf.filled().len();
+        let result = Pin::new(&mut self.inner).poll_read(cx, buf);
+        let read = buf.filled().len() - before;
+        if read != 0 {
+            // Only telemetry is shared; no synchronization with protocol or scheduling state.
+            self.bytes.fetch_add(read as u64, Ordering::Relaxed);
+        }
+        result
+    }
+}
 
 #[derive(Copy, Clone, PartialEq, Eq)]
 /// A wrapper type for a network checksum
@@ -239,6 +315,7 @@ impl Encodable for V1MessageHeader {
 /// * `address` - The address of a target node
 /// * `network` - The bitcoin network
 /// * `allow_v1_fallback` - Whether to allow fallback to V1 protocol if V2 negotiation fails
+/// * `socket_read_bytes` - Diagnostic byte counter shared across fallback attempts
 ///
 /// # Returns
 ///
@@ -251,13 +328,14 @@ pub async fn connect<A: ToSocketAddrs>(
     address: A,
     network: Network,
     allow_v1_fallback: bool,
+    socket_read_bytes: Arc<AtomicU64>,
 ) -> TransportResult {
-    match try_connection(&address, network, false).await {
+    match try_connection(&address, network, false, socket_read_bytes.clone()).await {
         Ok(transport) => Ok(transport),
         Err(TransportError::Protocol(ProtocolError::Io(_, ProtocolFailureSuggestion::RetryV1)))
             if allow_v1_fallback =>
         {
-            try_connection(&address, network, true).await
+            try_connection(&address, network, true, socket_read_bytes).await
         }
         Err(e) => Err(e),
     }
@@ -267,6 +345,7 @@ async fn try_connection<A: ToSocketAddrs>(
     address: &A,
     network: Network,
     force_v1: bool,
+    socket_read_bytes: Arc<AtomicU64>,
 ) -> TransportResult {
     let tcp_stream = TcpStream::connect(address).await?;
     // Data is buffered until there is enough to send out
@@ -279,7 +358,7 @@ async fn try_connection<A: ToSocketAddrs>(
         Err(_) => String::from("unknown peer"),
     };
     let (reader, writer) = tokio::io::split(tcp_stream);
-    let reader = BufReader::new(reader);
+    let reader = BufReader::new(CountedReader::new(reader, socket_read_bytes));
 
     match force_v1 {
         true => {
@@ -323,6 +402,7 @@ async fn try_connection<A: ToSocketAddrs>(
 /// * `port` - The port to connect to on the target
 /// * `network` - The bitcoin network
 /// * `allow_v1_fallback` - Whether to allow fallback to V1 protocol if V2 negotiation fails
+/// * `socket_read_bytes` - Diagnostic byte counter (after SOCKS negotiation), including partial messages
 ///
 /// # Returns
 ///
@@ -337,15 +417,33 @@ pub async fn connect_proxy<A: ToSocketAddrs + Clone + Debug>(
     address: LocalAddress,
     network: Network,
     allow_v1_fallback: bool,
+    socket_read_bytes: Arc<AtomicU64>,
 ) -> TransportResult {
     let addr = Socks5Addr::try_from(&address)?;
 
-    match try_proxy_connection(&proxy_addr, &addr, address.get_port(), network, false).await {
+    match try_proxy_connection(
+        &proxy_addr,
+        &addr,
+        address.get_port(),
+        network,
+        false,
+        socket_read_bytes.clone(),
+    )
+    .await
+    {
         Ok(transport) => Ok(transport),
         Err(TransportError::Protocol(ProtocolError::Io(_, ProtocolFailureSuggestion::RetryV1)))
             if allow_v1_fallback =>
         {
-            try_proxy_connection(&proxy_addr, &addr, address.get_port(), network, true).await
+            try_proxy_connection(
+                &proxy_addr,
+                &addr,
+                address.get_port(),
+                network,
+                true,
+                socket_read_bytes,
+            )
+            .await
         }
         Err(e) => Err(e),
     }
@@ -357,11 +455,12 @@ async fn try_proxy_connection<A: ToSocketAddrs + Clone + Debug>(
     port: u16,
     network: Network,
     force_v1: bool,
+    socket_read_bytes: Arc<AtomicU64>,
 ) -> TransportResult {
     let proxy = TcpStream::connect(proxy_addr.clone()).await?;
     let stream = Socks5StreamBuilder::connect(proxy, target_addr, port).await?;
     let (reader, writer) = tokio::io::split(stream);
-    let reader = BufReader::new(reader);
+    let reader = BufReader::new(CountedReader::new(reader, socket_read_bytes));
     match force_v1 {
         true => {
             debug!(
@@ -609,13 +708,27 @@ pub(crate) mod test_transport {
 
 #[cfg(test)]
 mod tests {
+    use std::future::Future;
+    use std::future::poll_fn;
     use std::io::ErrorKind;
+    use std::pin::Pin;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicU64;
+    use std::sync::atomic::Ordering;
+    use std::task::Poll;
 
     use bitcoin::Network;
     use bitcoin::consensus::serialize;
     use bitcoin::p2p::message::NetworkMessage;
     use bitcoin::p2p::message::RawNetworkMessage;
+    use tokio::io::AsyncRead;
+    use tokio::io::AsyncReadExt;
+    use tokio::io::AsyncWriteExt;
+    use tokio::io::BufReader;
+    use tokio::io::ReadBuf;
 
+    use super::CountedReader;
+    use super::SocketReadMetrics;
     use super::test_transport::*;
     use crate::p2p_wire::transport::P2PV1MessageChecksum;
     use crate::p2p_wire::transport::TransportError;
@@ -701,5 +814,121 @@ mod tests {
             .expect("Message should be a valid ping");
 
         assert_eq!(res, NetworkMessage::Ping(0));
+    }
+
+    #[tokio::test]
+    async fn socket_reads_count_partial_messages_while_read_exact_is_pending() {
+        let (mut writer, reader) = tokio::io::duplex(8);
+        let bytes = Arc::new(AtomicU64::new(0));
+        let mut reader = CountedReader::new(reader, bytes.clone());
+        writer.write_all(b"ab").await.unwrap();
+
+        let mut message = [0; 4];
+        let mut read = Box::pin(reader.read_exact(&mut message));
+        assert!(
+            poll_fn(|cx| Poll::Ready(read.as_mut().poll(cx)))
+                .await
+                .is_pending()
+        );
+        assert_eq!(bytes.load(Ordering::Relaxed), 2);
+
+        writer.write_all(b"cd").await.unwrap();
+        read.await.unwrap();
+        assert_eq!(&message, b"abcd");
+        assert_eq!(bytes.load(Ordering::Relaxed), 4);
+    }
+
+    #[tokio::test]
+    async fn socket_reads_count_only_new_bytes_and_preserve_eof() {
+        let bytes = Arc::new(AtomicU64::new(0));
+        let mut reader = CountedReader::new(&b"cd"[..], bytes.clone());
+        let mut storage = [0; 8];
+        let mut buffer = ReadBuf::new(&mut storage);
+        buffer.put_slice(b"ab");
+
+        poll_fn(|cx| Pin::new(&mut reader).poll_read(cx, &mut buffer))
+            .await
+            .unwrap();
+        assert_eq!(buffer.filled(), b"abcd");
+        assert_eq!(bytes.load(Ordering::Relaxed), 2);
+
+        poll_fn(|cx| Pin::new(&mut reader).poll_read(cx, &mut buffer))
+            .await
+            .unwrap();
+        assert_eq!(buffer.filled(), b"abcd");
+        assert_eq!(bytes.load(Ordering::Relaxed), 2);
+    }
+
+    #[tokio::test]
+    async fn socket_reads_preserve_errors() {
+        struct FailedReader;
+
+        impl AsyncRead for FailedReader {
+            fn poll_read(
+                self: Pin<&mut Self>,
+                _cx: &mut std::task::Context<'_>,
+                _buf: &mut ReadBuf<'_>,
+            ) -> Poll<std::io::Result<()>> {
+                Poll::Ready(Err(ErrorKind::ConnectionReset.into()))
+            }
+        }
+
+        let bytes = Arc::new(AtomicU64::new(0));
+        let mut reader = CountedReader::new(FailedReader, bytes.clone());
+        let error = reader.read(&mut [0; 8]).await.unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::ConnectionReset);
+        assert_eq!(bytes.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn buffered_reads_do_not_count_socket_bytes_twice() {
+        let bytes = Arc::new(AtomicU64::new(0));
+        let reader = CountedReader::new(&b"abcdefgh"[..], bytes.clone());
+        let mut reader = BufReader::with_capacity(8, reader);
+
+        assert_eq!(reader.read_u8().await.unwrap(), b'a');
+        assert_eq!(bytes.load(Ordering::Relaxed), 8);
+        let mut remaining = Vec::new();
+        reader.read_to_end(&mut remaining).await.unwrap();
+        assert_eq!(remaining, b"bcdefgh");
+        assert_eq!(bytes.load(Ordering::Relaxed), 8);
+    }
+
+    #[test]
+    fn socket_metrics_include_departed_peers_once() {
+        let mut metrics = SocketReadMetrics::default();
+        metrics.set_observing(true);
+        let bytes = metrics.register(1);
+        bytes.fetch_add(42, Ordering::Relaxed);
+        drop(bytes);
+
+        assert_eq!(metrics.take().get(&1), Some(&42));
+        assert!(metrics.take().is_empty());
+    }
+
+    #[test]
+    fn socket_metrics_reset_existing_peers_between_phases() {
+        let mut metrics = SocketReadMetrics::default();
+        let bytes = metrics.register(1);
+        bytes.fetch_add(42, Ordering::Relaxed);
+        metrics.set_observing(true);
+        assert_eq!(metrics.take().get(&1), Some(&0));
+
+        bytes.fetch_add(7, Ordering::Relaxed);
+        assert_eq!(metrics.take().get(&1), Some(&7));
+        bytes.fetch_add(9, Ordering::Relaxed);
+        metrics.set_observing(false);
+        assert_eq!(metrics.take().get(&1), Some(&0));
+    }
+
+    #[test]
+    fn socket_metrics_prune_departed_peers_when_not_observing() {
+        let mut metrics = SocketReadMetrics::default();
+        let departed = metrics.register(1);
+        drop(departed);
+        let _live = metrics.register(2);
+
+        assert!(!metrics.peers.contains_key(&1));
+        assert!(metrics.peers.contains_key(&2));
     }
 }

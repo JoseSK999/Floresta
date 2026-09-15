@@ -7,6 +7,7 @@
 mod blocks;
 pub mod chain_selector_ctx;
 mod conn;
+mod download_window;
 mod peer_man;
 pub mod running_ctx;
 pub mod swift_sync_ctx;
@@ -60,6 +61,7 @@ use super::node_handle::NodeResponse;
 use super::node_handle::UserRequest;
 use super::peer::PeerMessages;
 use super::socks::Socks5StreamBuilder;
+use super::transport::SocketReadMetrics;
 use super::transport::TransportProtocol;
 use crate::bitcoin_socket_addr::BitcoinSocketAddr;
 use crate::bitcoin_socket_addr::SystemResolver;
@@ -286,6 +288,8 @@ pub struct NodeCommon<Chain: ChainBackend> {
     pub(crate) peer_id_count: u32,
     pub(crate) peer_ids: Vec<u32>,
     pub(crate) peers: HashMap<u32, LocalPeerView>,
+    /// Read-only telemetry survives context transitions and peers leaving between log ticks.
+    pub(crate) socket_reads: SocketReadMetrics,
     pub(crate) peer_by_service: HashMap<ServiceFlags, Vec<u32>>,
     pub(crate) max_banscore: u32,
     pub(crate) address_man: AddressMan,
@@ -399,6 +403,7 @@ where
                 inflight_user_requests: HashMap::new(),
                 peer_id_count: 0,
                 peers: HashMap::new(),
+                socket_reads: SocketReadMetrics::default(),
                 last_block_request: chain.get_validation_index().expect("Invalid chain"),
                 chain,
                 peer_ids: Vec::new(),

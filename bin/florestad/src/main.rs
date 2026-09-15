@@ -121,7 +121,6 @@ fn main() {
 
     let _rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
-        .worker_threads(4)
         .thread_keep_alive(Duration::from_secs(60))
         .thread_name("florestad")
         .build()
