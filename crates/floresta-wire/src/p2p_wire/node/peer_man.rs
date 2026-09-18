@@ -772,8 +772,12 @@ where
                 if !self.has_compact_filters_peer() {
                     return Ok(());
                 }
+                let Some(filters) = self.block_filters.as_ref() else {
+                    return Ok(());
+                };
+
                 let peer = self.send_to_fast_peer(
-                    NodeRequest::GetFilter((self.chain.get_block_hash(0).unwrap(), 0)),
+                    NodeRequest::GetFilter((self.last_filter, filters.get_height()? + 1)),
                     ServiceFlags::COMPACT_FILTERS,
                 )?;
 
