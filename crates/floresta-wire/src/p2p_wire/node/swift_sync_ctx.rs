@@ -373,6 +373,9 @@ where
             }
         }
 
+        // Release pending accumulator updates when SwiftSync stops or aborts.
+        self.context.stump_updater = None;
+
         // Ordinary proof sync needs witnesses, including after aborting or stopping SwiftSync.
         self.witness_mode = WitnessMode::Full;
         done_cb(&self.chain);
