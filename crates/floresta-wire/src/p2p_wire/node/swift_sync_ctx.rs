@@ -151,7 +151,7 @@ where
 
     /// Returns `true` if SwiftSync failed, due to the hints being invalid or the current chain
     /// being invalid (below the SwiftSync stop height).
-    pub(crate) fn was_aborted(&self) -> bool {
+    pub fn was_aborted(&self) -> bool {
         self.context.abort_height.is_some()
     }
 
@@ -289,28 +289,34 @@ where
         Ok(())
     }
 
-    /// Starts the SwiftSync node by updating the last block requested and starting the main loop.
-    /// This loop to the following tasks, in order:
-    ///   - Receives messages from our peers through the node_tx channel, and handles them.
-    ///   - Checks if the kill signal is set, and if so breaks the loop.
-    ///   - Checks if we have downloaded and processed all blocks, and verifies that the aggregator
-    ///     is zero. If so, we are done.
-    ///   - Checks if our last validation update was long ago and creates an extra connection.
-    ///   - Handles timeouts for inflight requests.
-    ///   - If we are low on inflights, requests new blocks to validate.
-    pub async fn run(mut self, done_cb: impl FnOnce(&Chain)) -> Self {
+    /// Runs SwiftSync up to the hints' stop height, processing downloaded blocks in parallel
+    /// while the stump updater applies their additions in height order. Maintains peer
+    /// connections and retries timed-out requests until completion, abort or shutdown.
+    ///
+    /// After processing all blocks, checks that the final aggregator is zero (i.e., the
+    /// multiset of hinted-as-spent output `OutPoints` matches the input multiset) and that
+    /// supply doesn't exceed the maximum cap at the given height.
+    ///
+    /// # Errors
+    ///
+    /// Returns chainstate read or commit errors.
+    ///
+    /// An invalid chain or failed final check aborts SwiftSync without returning an error.
+    /// Use [`Self::was_aborted`] to check whether SwiftSync aborted.
+    pub async fn run(mut self, done_cb: impl FnOnce(&Chain)) -> Result<Self, WireError> {
         let Some(mut hints) = Self::parse_hints_file(&self.datadir, self.network) else {
-            return self;
+            return Ok(self);
         };
 
-        let validation_idx = self.chain.get_validation_index().unwrap();
+        // We can't safely proceed with an unreadable validation index
+        let validation_idx = self.chain.get_validation_index()?;
         if validation_idx >= hints.stop_height() {
-            return self;
+            return Ok(self);
         }
 
         if validation_idx != 0 {
             info!("Skipping SwiftSync: proof sync has already reached height {validation_idx}.");
-            return self;
+            return Ok(self);
         }
 
         // Allow as many worker threads as this machine supports. This is helpful for very high
@@ -349,7 +355,7 @@ where
                 biased;
 
                 // Maintenance runs only on tick but has priority
-                _ = ticker.tick() => match self.maintenance_tick(&mut hints).await {
+                _ = ticker.tick() => match self.maintenance_tick(&mut hints).await? {
                     LoopControl::Continue => {},
                     LoopControl::Break => break,
                 },
@@ -379,7 +385,7 @@ where
         // Ordinary proof sync needs witnesses, including after aborting or stopping SwiftSync.
         self.witness_mode = WitnessMode::Full;
         done_cb(&self.chain);
-        self
+        Ok(self)
     }
 
     /// Performs the periodic maintenance tasks, including checking for the cancel signal, peer
@@ -388,23 +394,23 @@ where
     /// Returns `LoopControl::Break` if we need to break the main `SwiftSync` loop, which may
     /// happen if the kill signal was set, we successfully finished SwiftSync, or we need to abort
     /// operation due to a validation error.
-    async fn maintenance_tick(&mut self, hints: &mut Hintsfile) -> LoopControl {
+    async fn maintenance_tick(&mut self, hints: &mut Hintsfile) -> Result<LoopControl, WireError> {
         if *self.kill_signal.read().await {
-            return LoopControl::Break;
+            return Ok(LoopControl::Break);
         }
 
         if let Some(invalid_h) = self.context.abort_height {
             // All our progress is lost since the hints refer to an invalid chain, and we don't
             // know if the current UTXO set is correct. We need to start from genesis.
             error!("Aborting SwiftSync: the most PoW chain is invalid at height {invalid_h}");
-            return LoopControl::Break;
+            return Ok(LoopControl::Break);
         }
 
         // If we have reached the SwiftSync stop height, and we have added all the utreexo leaves
         // to the accumulator, we have finished.
         if let Some(final_acc) = self.swift_sync_finished() {
-            self.handle_stop_height_reached(final_acc);
-            return LoopControl::Break;
+            self.handle_stop_height_reached(final_acc)?;
+            return Ok(LoopControl::Break);
         }
 
         // Checks if we need to open a new connection
@@ -430,13 +436,13 @@ where
         if assume_stale {
             try_and_log!(self.create_connection(ConnectionKind::Extra));
             self.last_tip_update = Instant::now();
-            return LoopControl::Continue;
+            return Ok(LoopControl::Continue);
         }
 
         try_and_log!(self.pump_swiftsync(hints));
 
         self.refill_block_requests();
-        LoopControl::Continue
+        Ok(LoopControl::Continue)
     }
 
     /// Returns true if we have requested all blocks up to the stop height, we have received and
@@ -467,7 +473,7 @@ where
     /// zero and supply is correct. On success marks the chain assumed and exits IBD.
     ///
     /// If one of the two invariants fails, it sets the `abort_height` field.
-    fn handle_stop_height_reached(&mut self, final_acc: Stump) {
+    fn handle_stop_height_reached(&mut self, final_acc: Stump) -> Result<(), WireError> {
         let stop_height = self.context.stop_height;
         let final_agg = self.context.agg;
         let final_supply = self.context.supply;
@@ -476,7 +482,7 @@ where
             error!("SwiftSync failed with the provided hints file; end aggregator is not zero");
 
             self.context.abort_height = Some(stop_height);
-            return;
+            return Ok(());
         }
 
         let consensus = Consensus::from(self.network);
@@ -484,17 +490,16 @@ where
             error!("Aborting SwiftSync: most PoW chain has excess supply ({final_supply})");
 
             self.context.abort_height = Some(stop_height);
-            return;
+            return Ok(());
         }
 
-        info!("SwiftSync is finished, switching to normal operation mode");
-        let tip_hash = self.chain.get_block_hash(stop_height).unwrap();
+        let tip_hash = self.chain.get_block_hash(stop_height)?;
 
         info!("SwiftSync produced the following accumulator for {tip_hash}: \n{final_acc:?}");
+        self.chain.mark_chain_as_assumed(final_acc, tip_hash)?;
 
-        self.chain
-            .mark_chain_as_assumed(final_acc, tip_hash)
-            .unwrap();
+        info!("SwiftSync is finished, switching to Utreexo-proof mode");
+        Ok(())
     }
 
     /// Process a message from a peer and handle it accordingly between the variants of [`PeerMessages`].

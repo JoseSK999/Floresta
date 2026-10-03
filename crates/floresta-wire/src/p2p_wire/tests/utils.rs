@@ -413,7 +413,10 @@ pub async fn setup_swiftsync(args: SetupNodeArgs) -> Arc<ChainState<FlatChainSto
     let node = setup_node::<SwiftSync>(args);
     let chain = node.chain.clone();
 
-    timeout(NODE_TIMEOUT, node.run(|_| {})).await.unwrap();
+    timeout(NODE_TIMEOUT, node.run(|_| {}))
+        .await
+        .unwrap()
+        .unwrap();
 
     chain
 }

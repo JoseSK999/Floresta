@@ -129,7 +129,8 @@ where
             context: SwiftSync::default(),
         };
 
-        let swift_sync = swift_sync.run(|_| {}).await;
+        // Propagate chainstate errors instead of falling back to proof sync with uncertain state
+        let swift_sync = swift_sync.run(|_| {}).await?;
         let swift_sync_failed = swift_sync.was_aborted();
 
         // Finish IBD with regular utreexo sync
@@ -356,11 +357,13 @@ where
         };
 
         // Catch up with the network, downloading blocks from our last validation index to the tip
+        let kill_signal = self.kill_signal.clone();
         info!("Catching up with the network...");
         self = match self.catch_up().await {
             Ok(node) => node,
             Err(e) => {
-                error!("An error happened while trying to catch-up with the network: {e:?}",);
+                error!("An error happened while trying to catch-up with the network: {e:?}");
+                *kill_signal.write().await = true;
                 return;
             }
         };

@@ -140,6 +140,7 @@ mod tests {
             let node = setup_node::<SwiftSync>(args);
             let node = timeout(Duration::from_secs(1), node.run(|_| {}))
                 .await
+                .unwrap()
                 .unwrap();
 
             // Skipping is not an abort and must not disable witnesses or advance validation
@@ -182,6 +183,7 @@ mod tests {
 
         let node = timeout(Duration::from_secs(1), node.run(|_| {}))
             .await
+            .unwrap()
             .unwrap();
 
         // Skip SwiftSync without changing the validated stump, request cursor, or witness mode
@@ -236,6 +238,7 @@ mod tests {
 
         let node = timeout(Duration::from_secs(10), node.run(|_| {}))
             .await
+            .unwrap()
             .unwrap();
 
         // Abort and invalidate the header without advancing validation or the Utreexo stump
