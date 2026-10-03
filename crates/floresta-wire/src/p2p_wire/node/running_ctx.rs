@@ -131,6 +131,15 @@ where
 
         // Propagate chainstate errors instead of falling back to proof sync with uncertain state
         let swift_sync = swift_sync.run(|_| {}).await?;
+
+        if *swift_sync.kill_signal.read().await {
+            // Return to the caller shutdown path instead of starting proof sync
+            return Ok(Self {
+                common: swift_sync.common,
+                context: self.context,
+            });
+        }
+
         let swift_sync_failed = swift_sync.was_aborted();
 
         // Finish IBD with regular utreexo sync
