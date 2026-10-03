@@ -20,6 +20,7 @@ mod tests {
     use tokio::time::timeout;
 
     use crate::node::WitnessMode;
+    use crate::node::running_ctx::RunningNode;
     use crate::node::swift_sync_ctx::SwiftSync;
     use crate::p2p_wire::tests::utils::PeerData;
     use crate::p2p_wire::tests::utils::SetupNodeArgs;
@@ -120,6 +121,40 @@ mod tests {
                 total_blocks: NUM_BLOCKS as u32,
             }
         );
+    }
+
+    /// Stopping SwiftSync must return to shutdown, not enter proof sync.
+    #[tokio::test]
+    async fn test_swift_sync_shutdown_skips_proof_sync() {
+        let datadir = format!("./tmp-db/{}.swift_sync_node", rand::random::<u32>());
+        std::fs::create_dir_all(&datadir).unwrap();
+        std::fs::copy(
+            "./src/p2p_wire/tests/test_data/bitcoin.hints",
+            format!("{datadir}/bitcoin.hints"),
+        )
+        .unwrap();
+
+        // Valid hints let SwiftSync start, but shutdown prevents processing
+        let args = SetupNodeArgs::new(Vec::new(), false, Network::Bitcoin, datadir, NUM_BLOCKS);
+        let node = setup_node::<RunningNode>(args);
+        *node.kill_signal.write().await = true;
+
+        let node = timeout(Duration::from_secs(1), node.catch_up())
+            .await
+            .unwrap()
+            .unwrap();
+
+        // Proof sync would replace this state with ProofSync, even on an already-stopped node
+        assert_eq!(
+            node.chain.ibd_state(),
+            IBDState::SwiftSync {
+                processed_blocks: 0,
+                total_blocks: u32::try_from(NUM_BLOCKS).unwrap(),
+            }
+        );
+        assert_eq!(node.chain.get_validation_index().unwrap(), 0);
+        assert_eq!(node.chain.get_acc().leaves, 0);
+        assert_eq!(node.witness_mode, WitnessMode::Full);
     }
 
     /// Unusable hints must skip SwiftSync, leaving the node ready for proof sync.
