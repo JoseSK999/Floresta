@@ -342,6 +342,17 @@ pub fn setup_node<T>(args: SetupNodeArgs) -> UtreexoNode<Chain, T>
 where
     T: 'static + Default + NodeContext,
 {
+    setup_node_with_assume_valid(args, AssumeValidArg::Disabled)
+}
+
+/// Builds a test node with the given AssumeValid setting.
+pub fn setup_node_with_assume_valid<T>(
+    args: SetupNodeArgs,
+    assume_valid: AssumeValidArg,
+) -> UtreexoNode<Chain, T>
+where
+    T: 'static + Default + NodeContext,
+{
     let net = args.network;
     let datadir = args.datadir;
 
@@ -353,7 +364,7 @@ where
     };
     // Create `ChainState` and add headers to it
     let chainstore = FlatChainStore::new(config).unwrap();
-    let chain = Arc::new(ChainState::open(chainstore, net, AssumeValidArg::Disabled).unwrap());
+    let chain = Arc::new(ChainState::open(chainstore, net, assume_valid).unwrap());
 
     let headers = match net {
         Network::Signet => signet_headers(),
@@ -415,8 +426,11 @@ pub async fn setup_sync_node(args: SetupNodeArgs) -> Arc<ChainState<FlatChainSto
     chain
 }
 
-pub async fn setup_swiftsync(args: SetupNodeArgs) -> Arc<ChainState<FlatChainStore>> {
-    let node = setup_node::<SwiftSync>(args);
+pub async fn setup_swiftsync(
+    args: SetupNodeArgs,
+    assume_valid: AssumeValidArg,
+) -> Arc<ChainState<FlatChainStore>> {
+    let node = setup_node_with_assume_valid::<SwiftSync>(args, assume_valid);
     let chain = node.chain.clone();
 
     timeout(NODE_TIMEOUT, node.run(|_| {}))

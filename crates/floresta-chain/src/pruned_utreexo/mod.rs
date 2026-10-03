@@ -127,6 +127,13 @@ pub trait BlockchainInterface {
     /// Returns the last block we validated
     fn get_validation_index(&self) -> Result<u32, Self::Error>;
 
+    /// Returns the configured AssumeValid block's height on the current best chain.
+    /// Returns `None` if AssumeValid is disabled or the block is not on that chain.
+    /// Backends without AssumeValid support default to `None`.
+    fn get_assume_valid_height(&self) -> Result<Option<u32>, Self::Error> {
+        Ok(None)
+    }
+
     /// Returns the height of a block, given it's hash
     fn get_block_height(&self, hash: &BlockHash) -> Result<Option<u32>, Self::Error>;
 
@@ -376,6 +383,10 @@ impl<T: BlockchainInterface> BlockchainInterface for Arc<T> {
 
     fn get_validation_index(&self) -> Result<u32, Self::Error> {
         T::get_validation_index(self)
+    }
+
+    fn get_assume_valid_height(&self) -> Result<Option<u32>, Self::Error> {
+        T::get_assume_valid_height(self)
     }
 
     fn get_block_locator_for_tip(&self, tip: BlockHash) -> Result<Vec<BlockHash>, BlockchainError> {

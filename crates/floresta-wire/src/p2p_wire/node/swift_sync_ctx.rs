@@ -293,6 +293,9 @@ where
     /// while the stump updater applies their additions in height order. Maintains peer
     /// connections and retries timed-out requests until completion, abort or shutdown.
     ///
+    /// Skips SwiftSync unless the configured AssumeValid block is on the best chain
+    /// and covers the hints' stop height.
+    ///
     /// After processing all blocks, checks that the final aggregator is zero (i.e., the
     /// multiset of hinted-as-spent output `OutPoints` matches the input multiset) and that
     /// supply doesn't exceed the maximum cap at the given height.
@@ -316,6 +319,19 @@ where
 
         if validation_idx != 0 {
             info!("Skipping SwiftSync: proof sync has already reached height {validation_idx}.");
+            return Ok(self);
+        }
+
+        // SwiftSync skips spent-coin validation, so the entire range must be covered by AssumeValid
+        let Some(assume_valid_height) = self.chain.get_assume_valid_height()? else {
+            info!("Skipping SwiftSync: no AssumeValid block on the best chain.");
+            return Ok(self);
+        };
+        if hints.stop_height() > assume_valid_height {
+            info!(
+                "Skipping SwiftSync: hints stop at {}, beyond AssumeValid height {assume_valid_height}.",
+                hints.stop_height(),
+            );
             return Ok(self);
         }
 
