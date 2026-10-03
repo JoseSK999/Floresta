@@ -48,6 +48,7 @@ use crate::node::try_and_log;
 use crate::node_context::LoopControl;
 use crate::node_context::NodeContext;
 use crate::node_context::PeerId;
+use crate::node_handle::UserRequest;
 use crate::p2p_wire::error::WireError;
 use crate::p2p_wire::peer::PeerMessages;
 use crate::p2p_wire::stump_updater::SparseUtreexoAdds;
@@ -296,6 +297,8 @@ where
     /// Skips SwiftSync unless the configured AssumeValid block is on the best chain
     /// and covers the hints' stop height.
     ///
+    /// User block requests are cancelled while SwiftSync runs.
+    ///
     /// After processing all blocks, checks that the final aggregator is zero (i.e., the
     /// multiset of hinted-as-spent output `OutPoints` matches the input multiset) and that
     /// supply doesn't exceed the maximum cap at the given height.
@@ -334,6 +337,10 @@ where
             );
             return Ok(self);
         }
+
+        // Pending user block replies must not consume blocks needed by SwiftSync.
+        self.inflight_user_requests
+            .retain(|request, _| !matches!(request, UserRequest::Block(_)));
 
         // Allow as many worker threads as this machine supports. This is helpful for very high
         // bandwidth connections (e.g., > 1 Gbps). Defaults to 4 workers for unknown CPUs.
@@ -525,6 +532,12 @@ where
         hints: &mut Hintsfile,
     ) -> Result<(), WireError> {
         match msg {
+            NodeNotification::FromUser(UserRequest::Block(_), _) => {
+                // User replies must not consume matching sync blocks and stall sync, nor receive
+                // witnessless blocks when full blocks were requested. Until replies are routed
+                // independently, dropping the responder rejects these requests.
+            }
+
             NodeNotification::FromUser(request, responder) => {
                 self.perform_user_request(request, responder).await;
             }
@@ -554,11 +567,6 @@ where
                             warn!("Received block {hash}, but we didn't ask for it");
                             self.increase_banscore(peer, 5)?;
 
-                            return Ok(());
-                        };
-
-                        // Reply and return early if it's a user-requested block. Else continue handling it.
-                        let Some(block) = self.check_is_user_block_and_reply(block)? else {
                             return Ok(());
                         };
 
